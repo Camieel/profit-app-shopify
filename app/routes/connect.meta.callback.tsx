@@ -10,11 +10,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   if (error || !code || !state) {
     console.error("[Meta OAuth] Error:", error);
-    return redirect("/app/settings?error=meta_auth_failed");
+    const shopDomain = "smart-order-notes-dev";
+    return redirect(
+      `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=meta_auth_failed`
+    );
   }
 
-  // Decode shop from state
   const shop = Buffer.from(state, "base64").toString("utf-8");
+  const shopDomain = shop.replace(".myshopify.com", "");
 
   const metaAppId = process.env.META_APP_ID!;
   const metaAppSecret = process.env.META_APP_SECRET!;
@@ -32,54 +35,80 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const tokenData = await tokenRes.json() as any;
 
     if (!tokenData.access_token) {
-      console.error("[Meta OAuth] No access token:", tokenData);
-      return redirect("/app/settings?error=meta_token_failed");
+      return redirect(
+        `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=meta_token_failed`
+      );
     }
 
     const accessToken = tokenData.access_token;
 
-    // Get ad accounts
+    // Get ALL ad accounts — store temporarily and redirect to selector
     const accountsRes = await fetch(
-      `https://graph.facebook.com/v19.0/me/adaccounts?fields=id,name,currency&access_token=${accessToken}`
+      `https://graph.facebook.com/v19.0/me/adaccounts?fields=id,name,currency,account_status&access_token=${accessToken}`
     );
     const accountsData = await accountsRes.json() as any;
-    const firstAccount = accountsData.data?.[0];
+    const accounts = accountsData.data ?? [];
 
-    if (!firstAccount) {
-      return redirect("/app/settings?error=meta_no_accounts");
+    if (accounts.length === 0) {
+      return redirect(
+        `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=meta_no_accounts`
+      );
     }
 
-    // Save integration
+    // If only one account — connect directly
+    if (accounts.length === 1) {
+      const account = accounts[0];
+      await saveMetaIntegration(shop, accessToken, account.id, account.name);
+      console.log(`[Meta OAuth] Connected for ${shop}: ${account.name}`);
+      return redirect(
+        `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?success=meta_connected`
+      );
+    }
+
+    // Multiple accounts — save token temporarily and redirect to selector
     await (db as any).adIntegration.upsert({
-      where: { shop_platform: { shop, platform: "meta" } },
-      update: {
-        accessToken,
-        accountId: firstAccount.id,
-        accountName: firstAccount.name,
-        isActive: true,
-      },
+      where: { shop_platform: { shop, platform: "meta_pending" } },
+      update: { accessToken, accountId: "pending", isActive: false },
       create: {
         shop,
-        platform: "meta",
+        platform: "meta_pending",
         accessToken,
-        accountId: firstAccount.id,
-        accountName: firstAccount.name,
+        accountId: "pending",
+        isActive: false,
       },
     });
 
-    console.log(`[Meta OAuth] Connected for ${shop}: ${firstAccount.name}`);
+    // Encode accounts in URL (simple approach for small lists)
+    const accountsParam = encodeURIComponent(JSON.stringify(
+      accounts.map((a: any) => ({ id: a.id, name: a.name, currency: a.currency }))
+    ));
 
-    // Trigger initial sync for last 30 days
-    syncMetaSpend(shop, accessToken, firstAccount.id).catch(console.error);
-
-const shopDomain = shop.replace(".myshopify.com", "");
-return redirect(
-  `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5`
-);  } catch (err) {
+    return redirect(
+      `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/meta/select-account?accounts=${accountsParam}`
+    );
+  } catch (err) {
     console.error("[Meta OAuth] Error:", err);
-    return redirect("/app/settings?error=meta_auth_failed");
+    return redirect(
+      `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=meta_auth_failed`
+    );
   }
 };
+
+async function saveMetaIntegration(
+  shop: string,
+  accessToken: string,
+  accountId: string,
+  accountName: string
+) {
+  await (db as any).adIntegration.upsert({
+    where: { shop_platform: { shop, platform: "meta" } },
+    update: { accessToken, accountId, accountName, isActive: true },
+    create: { shop, platform: "meta", accessToken, accountId, accountName, isActive: true },
+  });
+
+  // Kick off initial sync
+  syncMetaSpend(shop, accessToken, accountId).catch(console.error);
+}
 
 async function syncMetaSpend(shop: string, accessToken: string, accountId: string) {
   const since = new Date();
@@ -115,6 +144,5 @@ async function syncMetaSpend(shop: string, accessToken: string, accountId: strin
       },
     });
   }
-
   console.log(`[Meta Sync] Synced ${data.data?.length ?? 0} days for ${shop}`);
 }

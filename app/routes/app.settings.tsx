@@ -28,16 +28,21 @@ interface SettingsData {
   alertEmail: string;
   metaConnected: boolean;
   metaAccountName: string | null;
+  googleConnected: boolean;
+  googleAccountName: string | null;
   shop: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  const [settings, metaIntegration] = await Promise.all([
+  const [settings, metaIntegration, googleIntegration] = await Promise.all([
     db.shopSettings.findUnique({ where: { shop: session.shop } }),
     (db as any).adIntegration.findUnique({
       where: { shop_platform: { shop: session.shop, platform: "meta" } },
+    }),
+    (db as any).adIntegration.findUnique({
+      where: { shop_platform: { shop: session.shop, platform: "google" } },
     }),
   ]);
 
@@ -50,6 +55,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     alertEmail: settings?.alertEmail ?? "",
     metaConnected: !!(metaIntegration?.isActive),
     metaAccountName: metaIntegration?.accountName ?? null,
+    googleConnected: !!(googleIntegration?.isActive),
+    googleAccountName: googleIntegration?.accountName ?? null,
     shop: session.shop,
   });
 };
@@ -80,6 +87,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "disconnectMeta") {
     await (db as any).adIntegration.updateMany({
       where: { shop: session.shop, platform: "meta" },
+      data: { isActive: false },
+    });
+    return json({ success: true });
+  }
+
+  if (intent === "disconnectGoogle") {
+    await (db as any).adIntegration.updateMany({
+      where: { shop: session.shop, platform: "google" },
       data: { isActive: false },
     });
     return json({ success: true });
@@ -131,10 +146,84 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         synced++;
       }
 
-      console.log(`[Meta Manual Sync] Synced ${synced} days for ${session.shop}`);
-      return json({ success: true, synced });
+      return json({ success: true, synced, platform: "meta" });
     } catch (err) {
       console.error("[Meta Manual Sync] Error:", err);
+      return json({ error: "Sync failed" }, { status: 500 });
+    }
+  }
+
+  if (intent === "syncGoogle") {
+    const integration = await (db as any).adIntegration.findUnique({
+      where: { shop_platform: { shop: session.shop, platform: "google" } },
+    });
+
+    if (!integration?.isActive) {
+      return json({ error: "Google not connected" }, { status: 400 });
+    }
+
+    try {
+      const tokens = JSON.parse(integration.accessToken);
+      const accessToken = tokens.accessToken;
+      const customerId = integration.accountId;
+
+      const since = new Date();
+      since.setDate(since.getDate() - 30);
+      const sinceStr = since.toISOString().split("T")[0];
+      const untilStr = new Date().toISOString().split("T")[0];
+
+      const query = `
+        SELECT
+          segments.date,
+          metrics.cost_micros,
+          metrics.impressions,
+          metrics.clicks
+        FROM campaign
+        WHERE segments.date BETWEEN '${sinceStr}' AND '${untilStr}'
+      `;
+
+      const res = await fetch(
+        `https://googleads.googleapis.com/v17/customers/${customerId}/googleAds:search`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query }),
+        }
+      );
+      const data = await res.json() as any;
+
+      const byDate = new Map<string, { spend: number; impressions: number; clicks: number }>();
+      for (const row of data.results ?? []) {
+        const date = row.segments?.date;
+        const spend = (row.metrics?.costMicros ?? 0) / 1_000_000;
+        const impressions = row.metrics?.impressions ?? 0;
+        const clicks = row.metrics?.clicks ?? 0;
+        if (!date) continue;
+        const existing = byDate.get(date) ?? { spend: 0, impressions: 0, clicks: 0 };
+        byDate.set(date, {
+          spend: existing.spend + spend,
+          impressions: existing.impressions + impressions,
+          clicks: existing.clicks + clicks,
+        });
+      }
+
+      let synced = 0;
+      for (const [date, metrics] of byDate) {
+        await (db as any).adSpend.upsert({
+          where: { shop_platform_date: { shop: session.shop, platform: "google", date } },
+          update: { ...metrics, syncedAt: new Date() },
+          create: { shop: session.shop, platform: "google", date, ...metrics },
+        });
+        synced++;
+      }
+
+      return json({ success: true, synced, platform: "google" });
+    } catch (err) {
+      console.error("[Google Manual Sync] Error:", err);
       return json({ error: "Sync failed" }, { status: 500 });
     }
   }
@@ -153,11 +242,14 @@ export default function SettingsPage() {
   const [showBanner, setShowBanner] = useState(false);
 
   const submit = useSubmit();
-  const syncFetcher = useFetcher();
+  const metaSyncFetcher = useFetcher();
+  const googleSyncFetcher = useFetcher();
   const navigation = useNavigation();
   const isSaving = navigation.state === "submitting";
-  const isSyncing = syncFetcher.state === "submitting";
-  const syncResult = syncFetcher.data as any;
+  const isMetaSyncing = metaSyncFetcher.state === "submitting";
+  const isGoogleSyncing = googleSyncFetcher.state === "submitting";
+  const metaSyncResult = metaSyncFetcher.data as any;
+  const googleSyncResult = googleSyncFetcher.data as any;
 
   const handleSave = () => {
     submit(
@@ -175,28 +267,27 @@ export default function SettingsPage() {
     setShowBanner(true);
   };
 
-  const handleMetaSync = () => {
-    syncFetcher.submit({ intent: "syncMeta" }, { method: "POST" });
+  const handleConnectMeta = () => {
+    const metaAppId = "2461259587658951";
+    const redirectUri = encodeURIComponent(
+      "https://profit-app-shopify-production.up.railway.app/connect/meta/callback"
+    );
+    const scopes = encodeURIComponent("ads_read,ads_management,business_management");
+    const state = btoa(data.shop);
+    const metaAuthUrl =
+      `https://www.facebook.com/v19.0/dialog/oauth?` +
+      `client_id=${metaAppId}` +
+      `&redirect_uri=${redirectUri}` +
+      `&scope=${scopes}` +
+      `&state=${state}` +
+      `&response_type=code`;
+    window.top!.location.href = metaAuthUrl;
   };
 
-  const handleConnectMeta = () => {
-  const metaAppId = "2461259587658951"; // hardcode tijdelijk
-  const redirectUri = encodeURIComponent(
-    "https://profit-app-shopify-production.up.railway.app/connect/meta/callback"
-  );
-  const scopes = encodeURIComponent("ads_read,ads_management,business_management");
-  const state = btoa(data.shop);
-
-  const metaAuthUrl =
-    `https://www.facebook.com/v19.0/dialog/oauth?` +
-    `client_id=${metaAppId}` +
-    `&redirect_uri=${redirectUri}` +
-    `&scope=${scopes}` +
-    `&state=${state}` +
-    `&response_type=code`;
-
-  window.top!.location.href = metaAuthUrl;
-};
+  const handleConnectGoogle = () => {
+    window.top!.location.href =
+      `https://profit-app-shopify-production.up.railway.app/connect/google?shop=${data.shop}`;
+  };
 
   return (
     <Page title="Settings" backAction={{ content: "Dashboard", url: "/app" }}>
@@ -316,7 +407,8 @@ export default function SettingsPage() {
             <BlockStack gap="400">
               <Text variant="headingMd" as="h2">Ad Integrations</Text>
               <Text as="p" tone="subdued">
-                Connect your ad accounts to include ad spend in profit calculations. Spend is allocated proportionally across orders.
+                Connect your ad accounts to include ad spend in profit calculations.
+                Spend is allocated proportionally across orders each day.
               </Text>
               <Divider />
 
@@ -325,32 +417,23 @@ export default function SettingsPage() {
                 <BlockStack gap="100">
                   <InlineStack gap="200" blockAlign="center">
                     <Text variant="bodyMd" as="p" fontWeight="semibold">Meta Ads</Text>
-                    {data.metaConnected && (
-                      <Badge tone="success">Connected</Badge>
-                    )}
+                    {data.metaConnected && <Badge tone="success">Connected</Badge>}
                   </InlineStack>
-                  {data.metaConnected ? (
-                    <Text variant="bodySm" as="p" tone="subdued">
-                      {data.metaAccountName ?? "Ad Account connected"}
-                    </Text>
-                  ) : (
-                    <Text variant="bodySm" as="p" tone="subdued">
-                      Not connected
-                    </Text>
-                  )}
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    {data.metaConnected
+                      ? (data.metaAccountName ?? "Ad Account connected")
+                      : "Not connected"}
+                  </Text>
                 </BlockStack>
                 <InlineStack gap="200">
                   {data.metaConnected && (
-                    <Button size="slim" onClick={handleMetaSync} loading={isSyncing}>
+                    <Button size="slim" onClick={() => metaSyncFetcher.submit({ intent: "syncMeta" }, { method: "POST" })} loading={isMetaSyncing}>
                       Sync now
                     </Button>
                   )}
                   {data.metaConnected ? (
-                    <Button
-                      variant="plain"
-                      tone="critical"
-                      onClick={() => submit({ intent: "disconnectMeta" }, { method: "POST" })}
-                    >
+                    <Button variant="plain" tone="critical"
+                      onClick={() => submit({ intent: "disconnectMeta" }, { method: "POST" })}>
                       Disconnect
                     </Button>
                   ) : (
@@ -361,31 +444,61 @@ export default function SettingsPage() {
                 </InlineStack>
               </InlineStack>
 
-              {syncResult?.synced !== undefined && (
+              {metaSyncResult?.synced !== undefined && (
                 <Banner tone="success">
-                  <p>{"Synced " + syncResult.synced + " days of Meta ad spend."}</p>
+                  <p>{"Synced " + metaSyncResult.synced + " days of Meta ad spend."}</p>
                 </Banner>
               )}
-              {syncResult?.error && (
+              {metaSyncResult?.error && (
                 <Banner tone="critical">
-                  <p>{"Sync failed: " + syncResult.error}</p>
+                  <p>{"Meta sync failed: " + metaSyncResult.error}</p>
                 </Banner>
               )}
 
               <Divider />
 
-              {/* Google — coming soon */}
+              {/* Google */}
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
                   <InlineStack gap="200" blockAlign="center">
                     <Text variant="bodyMd" as="p" fontWeight="semibold">Google Ads</Text>
-                    <Badge tone="attention">Coming soon</Badge>
+                    {data.googleConnected && <Badge tone="success">Connected</Badge>}
                   </InlineStack>
                   <Text variant="bodySm" as="p" tone="subdued">
-                    Google Ads integration coming in the next update.
+                    {data.googleConnected
+                      ? (data.googleAccountName ?? "Ad Account connected")
+                      : "Not connected"}
                   </Text>
                 </BlockStack>
+                <InlineStack gap="200">
+                  {data.googleConnected && (
+                    <Button size="slim" onClick={() => googleSyncFetcher.submit({ intent: "syncGoogle" }, { method: "POST" })} loading={isGoogleSyncing}>
+                      Sync now
+                    </Button>
+                  )}
+                  {data.googleConnected ? (
+                    <Button variant="plain" tone="critical"
+                      onClick={() => submit({ intent: "disconnectGoogle" }, { method: "POST" })}>
+                      Disconnect
+                    </Button>
+                  ) : (
+                    <Button variant="primary" size="slim" onClick={handleConnectGoogle}>
+                      Connect Google Ads
+                    </Button>
+                  )}
+                </InlineStack>
               </InlineStack>
+
+              {googleSyncResult?.synced !== undefined && (
+                <Banner tone="success">
+                  <p>{"Synced " + googleSyncResult.synced + " days of Google ad spend."}</p>
+                </Banner>
+              )}
+              {googleSyncResult?.error && (
+                <Banner tone="critical">
+                  <p>{"Google sync failed: " + googleSyncResult.error}</p>
+                </Banner>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
