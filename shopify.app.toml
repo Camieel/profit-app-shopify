@@ -2,7 +2,7 @@
 
 client_id = "ee4ca012680c40ca36a20fab92e41598"
 name = "profit-tracker-app"
-application_url = "https://profit-app-shopify-production.up.railway.app"
+application_url = "https://example.com"
 embedded = true
 
 [build]
@@ -52,7 +52,7 @@ api_version = "2026-04"
 scopes = "read_fulfillments,read_inventory,read_merchant_managed_fulfillment_orders,read_orders,read_products,write_fulfillments,write_merchant_managed_fulfillment_orders"
 
 [auth]
-redirect_urls = [ "https://profit-app-shopify-production.up.railway.app/auth/callback" ]
+redirect_urls = [ "https://example.com/api/auth" ]
 
 [[extensions]]
 type = "flow_trigger"
