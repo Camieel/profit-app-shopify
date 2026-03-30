@@ -28,6 +28,7 @@ interface SettingsData {
   alertEmail: string;
   metaConnected: boolean;
   metaAccountName: string | null;
+  shop: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -49,6 +50,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     alertEmail: settings?.alertEmail ?? "",
     metaConnected: !!(metaIntegration?.isActive),
     metaAccountName: metaIntegration?.accountName ?? null,
+    shop: session.shop,
   });
 };
 
@@ -93,7 +95,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      // Sync last 30 days
       const since = new Date();
       since.setDate(since.getDate() - 30);
       const sinceStr = since.toISOString().split("T")[0];
@@ -150,13 +151,13 @@ export default function SettingsPage() {
   const [shippingCost, setShippingCost] = useState(String(data.defaultShippingCost));
   const [alertEmail, setAlertEmail] = useState(data.alertEmail);
   const [showBanner, setShowBanner] = useState(false);
-  const [syncBanner, setSyncBanner] = useState<string | null>(null);
 
   const submit = useSubmit();
   const syncFetcher = useFetcher();
   const navigation = useNavigation();
   const isSaving = navigation.state === "submitting";
   const isSyncing = syncFetcher.state === "submitting";
+  const syncResult = syncFetcher.data as any;
 
   const handleSave = () => {
     submit(
@@ -175,15 +176,15 @@ export default function SettingsPage() {
   };
 
   const handleMetaSync = () => {
-    syncFetcher.submit(
-      { intent: "syncMeta" },
-      { method: "POST" }
-    );
-    setSyncBanner(null);
+    syncFetcher.submit({ intent: "syncMeta" }, { method: "POST" });
   };
 
-  // Show sync result
-  const syncResult = syncFetcher.data as any;
+  const handleConnectMeta = () => {
+    const appUrl = process.env.NODE_ENV === "production"
+      ? "https://profit-app-shopify-production.up.railway.app"
+      : window.location.origin;
+    window.top!.location.href = `${appUrl}/auth/meta?shop=${data.shop}`;
+  };
 
   return (
     <Page title="Settings" backAction={{ content: "Dashboard", url: "/app" }}>
@@ -328,11 +329,7 @@ export default function SettingsPage() {
                 </BlockStack>
                 <InlineStack gap="200">
                   {data.metaConnected && (
-                    <Button
-                      size="slim"
-                      onClick={handleMetaSync}
-                      loading={isSyncing}
-                    >
+                    <Button size="slim" onClick={handleMetaSync} loading={isSyncing}>
                       Sync now
                     </Button>
                   )}
@@ -345,15 +342,9 @@ export default function SettingsPage() {
                       Disconnect
                     </Button>
                   ) : (
-                    <Button
-  variant="primary"
-  size="slim"
-  onClick={() => {
-    window.top!.location.href = `${window.location.origin}/auth/meta`;
-  }}
->
-  Connect Meta Ads
-</Button>
+                    <Button variant="primary" size="slim" onClick={handleConnectMeta}>
+                      Connect Meta Ads
+                    </Button>
                   )}
                 </InlineStack>
               </InlineStack>
