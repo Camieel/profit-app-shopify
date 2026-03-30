@@ -1,3 +1,5 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "ee4ca012680c40ca36a20fab92e41598"
 name = "profit-tracker-app"
 application_url = "https://profit-app-shopify-production.up.railway.app"
