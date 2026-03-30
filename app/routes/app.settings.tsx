@@ -31,6 +31,8 @@ interface SettingsData {
   googleConnected: boolean;
   googleAccountName: string | null;
   shop: string;
+  metaAppId: string;
+  appUrl: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -58,6 +60,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     googleConnected: !!(googleIntegration?.isActive),
     googleAccountName: googleIntegration?.accountName ?? null,
     shop: session.shop,
+    metaAppId: process.env.META_APP_ID || "",
+    appUrl: process.env.SHOPIFY_APP_URL || "https://profit-app-shopify-production.up.railway.app",
   });
 };
 
@@ -268,15 +272,12 @@ export default function SettingsPage() {
   };
 
   const handleConnectMeta = () => {
-    const metaAppId = "2461259587658951";
-    const redirectUri = encodeURIComponent(
-      "https://profit-app-shopify-production.up.railway.app/connect/meta/callback"
-    );
+    const redirectUri = encodeURIComponent(`${data.appUrl}/connect/meta/callback`);
     const scopes = encodeURIComponent("ads_read,ads_management,business_management");
     const state = btoa(data.shop);
     const metaAuthUrl =
       `https://www.facebook.com/v19.0/dialog/oauth?` +
-      `client_id=${metaAppId}` +
+      `client_id=${data.metaAppId}` +
       `&redirect_uri=${redirectUri}` +
       `&scope=${scopes}` +
       `&state=${state}` +
@@ -285,8 +286,7 @@ export default function SettingsPage() {
   };
 
   const handleConnectGoogle = () => {
-    window.top!.location.href =
-      `https://profit-app-shopify-production.up.railway.app/connect/google?shop=${data.shop}`;
+    window.top!.location.href = `${data.appUrl}/connect/google?shop=${data.shop}`;
   };
 
   return (
