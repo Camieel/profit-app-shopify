@@ -89,6 +89,7 @@ model Order {
   cogs              Float    @default(0)
   transactionFee    Float    @default(0)
   shippingCost      Float    @default(0)
+  adSpendAllocated  Float    @default(0)
 
   grossProfit       Float    @default(0)
   netProfit         Float    @default(0)
