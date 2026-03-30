@@ -9,10 +9,7 @@ ENV NODE_ENV=production
 
 COPY package.json package-lock.json* .npmrc ./
 
-# Install ALL deps including dev (needed for prisma CLI)
-RUN npm ci --legacy-peer-deps && npm cache clean --force
-
-RUN ./node_modules/.bin/prisma generate
+RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
 
 COPY . .
 
