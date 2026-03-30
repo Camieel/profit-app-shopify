@@ -3,6 +3,11 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { triggerOrderProfitCalculated } from "../lib/flow.server";
 
+// Simpele helper om een ID te genereren
+function generateCuid() {
+  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, admin, payload } = await authenticate.webhook(request);
 
@@ -60,6 +65,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       totalCogs += itemCogs;
 
       lineItemsData.push({
+        id: generateCuid(), // Voeg handmatig ID toe aan line items
         shopifyVariantId: String(item.variant_id),
         productTitle: item.title,
         variantTitle: item.variant_title ?? null,
@@ -111,31 +117,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const marginPercent = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
     // 7. Save to DB
+    const orderId = generateCuid(); // Genereer handmatig het Order ID
+    
     const savedOrder = await (db.order.create as any)({
-  data: {
-    shop,
-    shopifyOrderId: `gid://shopify/Order/${order.id}`,
-    shopifyOrderName: order.name,
-    totalPrice: revenue,
-    subtotalPrice: parseFloat(order.subtotal_price),
-    totalTax: parseFloat(order.total_tax || "0"),
-    totalDiscounts: discounts,
-    shippingRevenue,
-    currency: order.currency,
-    cogs: totalCogs,
-    transactionFee,
-    shippingCost,
-    adSpendAllocated,
-    grossProfit,
-    netProfit,
-    marginPercent,
-    cogsComplete,
-    financialStatus: order.financial_status ?? null,
-    fulfillmentStatus: order.fulfillment_status ?? null,
-    shopifyCreatedAt: new Date(order.created_at),
-    lineItems: { create: lineItemsData },
-  },
-});
+      data: {
+        id: orderId, // Geef het ID expliciet mee
+        shop,
+        shopifyOrderId: `gid://shopify/Order/${order.id}`,
+        shopifyOrderName: order.name,
+        totalPrice: revenue,
+        subtotalPrice: parseFloat(order.subtotal_price),
+        totalTax: parseFloat(order.total_tax || "0"),
+        totalDiscounts: discounts,
+        shippingRevenue,
+        currency: order.currency,
+        cogs: totalCogs,
+        transactionFee,
+        shippingCost,
+        adSpendAllocated,
+        grossProfit,
+        netProfit,
+        marginPercent,
+        cogsComplete,
+        financialStatus: order.financial_status ?? null,
+        fulfillmentStatus: order.fulfillment_status ?? null,
+        shopifyCreatedAt: new Date(order.created_at),
+        lineItems: { create: lineItemsData },
+      },
+    });
 
     console.log(
       `[Order Saved] ${order.name} | Margin: ${marginPercent.toFixed(1)}% | Net: ${netProfit.toFixed(2)} | Ad spend: $${adSpendAllocated.toFixed(2)}`
@@ -224,6 +233,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (belowMargin || belowProfit || netProfit < 0) {
         await db.alert.create({
           data: {
+            id: generateCuid(), // Voeg ook hier expliciet een ID toe voor de zekerheid
             shop,
             orderId: savedOrder.id,
             type: netProfit < 0 ? "negative_profit" : "low_margin",
