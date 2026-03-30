@@ -40,7 +40,9 @@ model Shop {
   orders      Order[]
   products    Product[]
   alerts      Alert[]
-  expenses    Expense[]   // voeg deze regel toe
+  expenses    Expense[]  
+  adIntegrations AdIntegration[]
+  adSpend     AdSpend[]
 }
 
 model ShopSettings {
@@ -184,4 +186,38 @@ model Expense {
   isActive    Boolean  @default(true)
 
   createdAt   DateTime @default(now())
+}
+
+model AdIntegration {
+  id            String   @id @default(cuid())
+  shop          String
+  shopRelation  Shop     @relation(fields: [shop], references: [shop])
+  
+  platform      String   // "meta" | "google"
+  accessToken   String
+  accountId     String   // Ad account ID
+  accountName   String?
+  isActive      Boolean  @default(true)
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@unique([shop, platform])
+}
+
+model AdSpend {
+  id             String   @id @default(cuid())
+  shop           String
+  shopRelation   Shop     @relation(fields: [shop], references: [shop])
+  
+  platform       String   // "meta" | "google"
+  date           String   // "2026-03-30"
+  spend          Float
+  impressions    Int      @default(0)
+  clicks         Int      @default(0)
+  currency       String   @default("USD")
+  
+  syncedAt       DateTime @default(now())
+  
+  @@unique([shop, platform, date])
 }
