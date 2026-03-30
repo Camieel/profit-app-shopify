@@ -345,9 +345,15 @@ export default function SettingsPage() {
                       Disconnect
                     </Button>
                   ) : (
-                    <Button url="/auth/meta" variant="primary" size="slim">
-                      Connect Meta Ads
-                    </Button>
+                    <Button
+  variant="primary"
+  size="slim"
+  onClick={() => {
+    window.top!.location.href = `${window.location.origin}/auth/meta`;
+  }}
+>
+  Connect Meta Ads
+</Button>
                   )}
                 </InlineStack>
               </InlineStack>
