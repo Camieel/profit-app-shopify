@@ -180,7 +180,22 @@ export default function SettingsPage() {
   };
 
   const handleConnectMeta = () => {
-  window.top!.location.href = `https://profit-app-shopify-production.up.railway.app/connect/meta?shop=${data.shop}`;
+  const metaAppId = "2461259587658951"; // hardcode tijdelijk
+  const redirectUri = encodeURIComponent(
+    "https://profit-app-shopify-production.up.railway.app/connect/meta/callback"
+  );
+  const scopes = encodeURIComponent("ads_read,ads_management,business_management");
+  const state = btoa(data.shop);
+
+  const metaAuthUrl =
+    `https://www.facebook.com/v19.0/dialog/oauth?` +
+    `client_id=${metaAppId}` +
+    `&redirect_uri=${redirectUri}` +
+    `&scope=${scopes}` +
+    `&state=${state}` +
+    `&response_type=code`;
+
+  window.top!.location.href = metaAuthUrl;
 };
 
   return (
