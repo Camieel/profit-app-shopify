@@ -7,11 +7,13 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json* .npmrc ./
 
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --legacy-peer-deps && npm cache clean --force
 
 COPY . .
+
+RUN npx prisma generate
 
 RUN npm run build
 
