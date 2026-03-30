@@ -1,10 +1,9 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "ee4ca012680c40ca36a20fab92e41598"
 name = "profit-tracker-app"
-application_url = "https://profit-app-shopify.railway.internal"
+application_url = "https://profit-app-shopify-production.up.railway.app"
 embedded = true
-
-[auth]
-redirect_urls = ["https://profit-app-shopify.railway.internal/auth/callback"]
 
 [build]
 automatically_update_urls_on_dev = true
@@ -13,96 +12,100 @@ automatically_update_urls_on_dev = true
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  topics = ["orders/create"]
-  uri = "/webhooks/orders/create"
-
-  [[webhooks.subscriptions]]
-  topics = ["orders/updated"]
-  uri = "/webhooks/orders/updated"
-
-  [[webhooks.subscriptions]]
-  topics = ["products/update"]
-  uri = "/webhooks/products/update"
-
-  [[webhooks.subscriptions]]
-  topics = ["inventory_items/update"]
+  topics = [ "inventory_items/update" ]
   uri = "/webhooks/inventory-items/update"
 
   [[webhooks.subscriptions]]
-  topics = ["app/uninstalled"]
-  uri = "/webhooks/app/uninstalled"
+  uri = "/webhooks/customers/data-request"
+  compliance_topics = [ "customers/data_request" ]
 
   [[webhooks.subscriptions]]
-  topics = ["app/scopes_update"]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "products/update" ]
+  uri = "/webhooks/products/update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes-update"
 
   [[webhooks.subscriptions]]
-  compliance_topics = ["customers/data_request"]
-  uri = "/webhooks/customers/data-request"
+  topics = [ "orders/create" ]
+  uri = "/webhooks/orders/create"
 
   [[webhooks.subscriptions]]
-  compliance_topics = ["customers/redact"]
-  uri = "/webhooks/customers/redact"
+  topics = [ "orders/updated" ]
+  uri = "/webhooks/orders/updated"
 
   [[webhooks.subscriptions]]
-  compliance_topics = ["shop/redact"]
-  uri = "/webhooks/shop/redact"
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
 
 [access_scopes]
-scopes = "read_orders,read_products,read_inventory,write_fulfillments,read_fulfillments,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_fulfillments,read_inventory,read_merchant_managed_fulfillment_orders,read_orders,read_products,write_fulfillments,write_merchant_managed_fulfillment_orders"
+
+[auth]
+redirect_urls = [ "https://profit-app-shopify-production.up.railway.app/auth/callback" ]
 
 [[extensions]]
 type = "flow_trigger"
 name = "Order Profit Calculated"
 handle = "order-profit-calculated"
 
-  [[extensions.settings.fields]]
-  key = "order_id"
-  type = "single_line_text_field"
-  name = "Order ID"
+[[extensions.settings.fields]]
+key = "order_id"
+type = "single_line_text_field"
+name = "Order ID"
 
-  [[extensions.settings.fields]]
-  key = "order_name"
-  type = "single_line_text_field"
-  name = "Order Name"
+[[extensions.settings.fields]]
+key = "order_name"
+type = "single_line_text_field"
+name = "Order Name"
 
-  [[extensions.settings.fields]]
-  key = "margin_percent"
-  type = "number_decimal"
-  name = "Margin Percent"
+[[extensions.settings.fields]]
+key = "margin_percent"
+type = "number_decimal"
+name = "Margin Percent"
 
-  [[extensions.settings.fields]]
-  key = "net_profit"
-  type = "number_decimal"
-  name = "Net Profit"
+[[extensions.settings.fields]]
+key = "net_profit"
+type = "number_decimal"
+name = "Net Profit"
 
-  [[extensions.settings.fields]]
-  key = "revenue"
-  type = "number_decimal"
-  name = "Revenue"
+[[extensions.settings.fields]]
+key = "revenue"
+type = "number_decimal"
+name = "Revenue"
 
-  [[extensions.settings.fields]]
-  key = "is_loss"
-  type = "boolean"
-  name = "Is Loss"
+[[extensions.settings.fields]]
+key = "is_loss"
+type = "boolean"
+name = "Is Loss"
 
 [[extensions]]
 type = "flow_action"
 name = "Hold Order for Review"
 handle = "hold-order-for-review"
 description = "Place a fulfillment hold on an order for profit review"
-runtime_url = "https://example.com/api/flow/hold-order"
+runtime_url = "https://profit-app-shopify-production.up.railway.app/api/flow/hold-order"
 
-  [[extensions.settings.fields]]
-  key = "order_id"
-  type = "single_line_text_field"
-  name = "Order ID"
-  description = "The Shopify Order ID to hold"
-  required = true
+[[extensions.settings.fields]]
+key = "order_id"
+type = "single_line_text_field"
+name = "Order ID"
+description = "The Shopify Order ID to hold"
+required = true
 
-  [[extensions.settings.fields]]
-  key = "reason"
-  type = "single_line_text_field"
-  name = "Hold Reason"
-  description = "Optional note explaining why the order is held"
-  required = false
+[[extensions.settings.fields]]
+key = "reason"
+type = "single_line_text_field"
+name = "Hold Reason"
+description = "Optional note explaining why the order is held"
+required = false

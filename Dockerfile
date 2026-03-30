@@ -9,9 +9,11 @@ ENV NODE_ENV=production
 
 COPY package.json package-lock.json* .npmrc ./
 
-RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
+RUN npm ci --legacy-peer-deps && npm cache clean --force
 
 COPY . .
+
+RUN ./node_modules/.bin/prisma generate
 
 RUN npm run build
 
