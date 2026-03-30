@@ -13,7 +13,7 @@ RUN npm ci --legacy-peer-deps && npm cache clean --force
 
 COPY . .
 
-RUN npx prisma generate
+RUN ./node_modules/.bin/prisma generate
 
 RUN npm run build
 
