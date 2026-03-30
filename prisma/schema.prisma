@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model Shop {
+  id          String   @id @default(cuid())
+  shop        String   @unique
+  isActive    Boolean  @default(true)
+  installedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  settings    ShopSettings?
+  orders      Order[]
+  products    Product[]
+  alerts      Alert[]
+  expenses    Expense[]   // voeg deze regel toe
+}
+
+model ShopSettings {
+  id                     String  @id @default(cuid())
+  shop                   String  @unique
+  shopRelation           Shop    @relation(fields: [shop], references: [shop])
+
+  paymentGateway         String  @default("shopify_payments")
+  transactionFeePercent  Float   @default(2.9)
+  transactionFeeFixed    Float   @default(0.30)
+  shopifyExtraFeePercent Float   @default(0.0)
+
+  shippingMode           String  @default("fixed")
+  defaultShippingCost    Float   @default(0)
+
+  alertEnabled           Boolean @default(true)
+  alertMarginThreshold   Float   @default(0)
+  alertProfitThreshold   Float   @default(0)
+  holdEnabled            Boolean @default(false)
+  holdMarginThreshold    Float   @default(0)
+
+  alertEmail             String?
+  dashboardCards         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id                String   @id @default(cuid())
+  shop              String
+  shopRelation      Shop     @relation(fields: [shop], references: [shop])
+
+  shopifyOrderId    String
+  shopifyOrderName  String
+
+  totalPrice        Float
+  subtotalPrice     Float
+  totalTax          Float    @default(0)
+  totalDiscounts    Float    @default(0)
+  shippingRevenue   Float    @default(0)
+  currency          String   @default("USD")
+
+  cogs              Float    @default(0)
+  transactionFee    Float    @default(0)
+  shippingCost      Float    @default(0)
+
+  grossProfit       Float    @default(0)
+  netProfit         Float    @default(0)
+  marginPercent     Float    @default(0)
+
+  isHeld            Boolean  @default(false)
+  heldReason        String?
+  alertSent         Boolean  @default(false)
+  cogsComplete      Boolean  @default(true)
+
+  financialStatus   String?
+  fulfillmentStatus String?
+  shopifyCreatedAt  DateTime
+  createdAt         DateTime @default(now())
+
+  lineItems         OrderLineItem[]
+  alerts            Alert[]
+
+  @@unique([shop, shopifyOrderId])
+}
+
+model OrderLineItem {
+  id               String  @id @default(cuid())
+  orderId          String
+  order            Order   @relation(fields: [orderId], references: [id])
+
+  shopifyVariantId String?
+  productTitle     String
+  variantTitle     String?
+  quantity         Int
+  price            Float
+  discount         Float   @default(0)
+  cogs             Float   @default(0)
+  cogsFound        Boolean @default(false)
+}
+
+model Product {
+  id               String  @id @default(cuid())
+  shop             String
+  shopRelation     Shop    @relation(fields: [shop], references: [shop])
+
+  shopifyProductId String
+  title            String
+  variants         ProductVariant[]
+
+  @@unique([shop, shopifyProductId])
+}
+
+model ProductVariant {
+  id                     String   @id @default(cuid())
+  productId              String
+  product                Product  @relation(fields: [productId], references: [id])
+
+  shopifyVariantId       String
+  shopifyInventoryItemId String?
+  title                  String
+  sku                    String?
+
+  costPerItem            Float?
+  customCost             Float?
+  effectiveCost          Float?
+
+  updatedAt              DateTime @updatedAt
+
+  @@unique([productId, shopifyVariantId])
+}
+
+model Alert {
+  id           String   @id @default(cuid())
+  shop         String
+  shopRelation Shop     @relation(fields: [shop], references: [shop])
+
+  orderId      String?
+  order        Order?   @relation(fields: [orderId], references: [id])
+
+  type         String
+  message      String
+  data         Json?
+  isRead       Boolean  @default(false)
+
+  createdAt    DateTime @default(now())
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  shop        String
+  shopRelation Shop    @relation(fields: [shop], references: [shop])
+
+  name        String
+  amount      Float
+  currency    String   @default("USD")
+  interval    String   @default("monthly")
+  startDate   DateTime
+  endDate     DateTime?
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+}
