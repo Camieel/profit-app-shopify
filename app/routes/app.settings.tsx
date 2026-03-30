@@ -180,11 +180,8 @@ export default function SettingsPage() {
   };
 
   const handleConnectMeta = () => {
-    const appUrl = process.env.NODE_ENV === "production"
-      ? "https://profit-app-shopify-production.up.railway.app"
-      : window.location.origin;
-    window.top!.location.href = `${appUrl}/auth/meta?shop=${data.shop}`;
-  };
+  window.top!.location.href = `https://profit-app-shopify-production.up.railway.app/connect/meta?shop=${data.shop}`;
+};
 
   return (
     <Page title="Settings" backAction={{ content: "Dashboard", url: "/app" }}>

@@ -6,7 +6,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
   const metaAppId = process.env.META_APP_ID!;
-  const redirectUri = `${process.env.SHOPIFY_APP_URL}/auth/meta/callback`;
+  const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/meta/callback`;
 
   const scopes = [
     "ads_read",

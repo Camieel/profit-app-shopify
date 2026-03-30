@@ -18,8 +18,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const metaAppId = process.env.META_APP_ID!;
   const metaAppSecret = process.env.META_APP_SECRET!;
-  const redirectUri = `${process.env.SHOPIFY_APP_URL}/auth/meta/callback`;
-
+  const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/meta/callback`;
+  
   try {
     // Exchange code for access token
     const tokenRes = await fetch(
