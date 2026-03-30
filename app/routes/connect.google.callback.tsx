@@ -1,3 +1,6 @@
+
+// app/routes/connect.google.callback.tsx
+
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
 import db from "../db.server";
@@ -16,7 +19,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.error("[Google OAuth] Error:", error);
     return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=google_auth_failed"));
   }
-  
+
   const clientId = process.env.GOOGLE_CLIENT_ID!;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
   const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/google/callback`;
@@ -118,7 +121,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 function buildShopifyAdminUrl(shopDomain: string, path: string) {
-  return `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/${path}`;
+  const appHandle = process.env.SHOPIFY_APP_HANDLE || "profit-tracker-app-5";
+  return `https://admin.shopify.com/store/${shopDomain}/apps/${appHandle}/app/${path}`;
 }
 
 async function saveGoogleIntegration(
