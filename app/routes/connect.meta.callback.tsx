@@ -19,7 +19,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const metaAppId = process.env.META_APP_ID!;
   const metaAppSecret = process.env.META_APP_SECRET!;
   const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/meta/callback`;
-  
+
   try {
     // Exchange code for access token
     const tokenRes = await fetch(
@@ -72,8 +72,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Trigger initial sync for last 30 days
     syncMetaSpend(shop, accessToken, firstAccount.id).catch(console.error);
 
-    return redirect("/app/settings?success=meta_connected");
-  } catch (err) {
+const shopDomain = shop.replace(".myshopify.com", "");
+return redirect(
+  `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5`
+);  } catch (err) {
     console.error("[Meta OAuth] Error:", err);
     return redirect("/app/settings?error=meta_auth_failed");
   }
