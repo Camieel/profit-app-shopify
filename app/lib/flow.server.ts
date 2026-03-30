@@ -37,16 +37,17 @@ export async function triggerOrderProfitCalculated({
       }`,
       {
         variables: {
-            body: JSON.stringify({
-  properties: {
-    order_id: orderId,
-    order_name: orderName,
-    margin_percent: Math.round(marginPercent * 100) / 100,
-    net_profit: Math.round(netProfit * 100) / 100,
-    revenue: Math.round(revenue * 100) / 100,
-    is_loss: isLoss,
-  },
-}) ,
+          body: JSON.stringify({
+            trigger_id: "order-profit-calculated",
+            properties: {
+              order_id: orderId,
+              order_name: orderName,
+              margin_percent: Math.round(marginPercent * 100) / 100,
+              net_profit: Math.round(netProfit * 100) / 100,
+              revenue: Math.round(revenue * 100) / 100,
+              is_loss: isLoss,
+            },
+          }),
         },
       }
     );
