@@ -394,21 +394,26 @@ export default function SettingsPage() {
       "ads_read,ads_management,business_management"
     );
     const state = btoa(data.shop);
-    window.top!.location.href =
+    const url =
       `https://www.facebook.com/v19.0/dialog/oauth?` +
       `client_id=${data.metaAppId}` +
       `&redirect_uri=${redirectUri}` +
       `&scope=${scopes}` +
       `&state=${state}` +
       `&response_type=code`;
+    
+    // Open in new tab
+    window.open(url, "_blank");
   };
 
   const handleConnectGoogle = () => {
-    window.top!.location.href = `${data.appUrl}/connect/google?shop=${data.shop}`;
+    // Open in new tab
+    window.open(`${data.appUrl}/connect/google?shop=${data.shop}`, "_blank");
   };
 
   const handleConnectTiktok = () => {
-    window.top!.location.href = `${data.appUrl}/connect/tiktok?shop=${data.shop}`;
+    // Open in new tab
+    window.open(`${data.appUrl}/connect/tiktok?shop=${data.shop}`, "_blank");
   };
 
   return (

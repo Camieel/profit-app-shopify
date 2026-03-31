@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useLoaderData, useFetcher } from "react-router";
+import { Form, redirect, useLoaderData, useFetcher, useRevalidator } from "react-router";
 import {
   Page,
   Card,
@@ -16,8 +16,8 @@ import {
   Divider,
   ProgressBar,
   Badge,
-  Link,
 } from "@shopify/polaris";
+import { CheckCircleIcon } from '@shopify/polaris-icons';
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -35,13 +35,26 @@ interface LoaderData {
     holdMarginThreshold: number;
     alertEmail: string | null;
   };
+  ads: {
+    metaConnected: boolean;
+    googleConnected: boolean;
+    tiktokConnected: boolean;
+    metaAppId: string;
+    appUrl: string;
+    shop: string;
+  };
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const settings = await db.shopSettings.findUnique({ where: { shop } });
+  const [settings, metaIntegration, googleIntegration, tiktokIntegration] = await Promise.all([
+    db.shopSettings.findUnique({ where: { shop } }),
+    (db as any).adIntegration.findUnique({ where: { shop_platform: { shop, platform: "meta" } } }),
+    (db as any).adIntegration.findUnique({ where: { shop_platform: { shop, platform: "google" } } }),
+    (db as any).adIntegration.findUnique({ where: { shop_platform: { shop, platform: "tiktok" } } }),
+  ]);
 
   if (settings?.onboardingComplete) {
     return redirect("/app");
@@ -68,6 +81,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       holdMarginThreshold: settings?.holdMarginThreshold ?? 0,
       alertEmail: settings?.alertEmail ?? null,
     },
+    ads: {
+      metaConnected: !!metaIntegration?.isActive,
+      googleConnected: !!googleIntegration?.isActive,
+      tiktokConnected: !!tiktokIntegration?.isActive,
+      metaAppId: process.env.META_APP_ID || "",
+      appUrl: process.env.SHOPIFY_APP_URL || "https://profit-app-shopify-production.up.railway.app",
+      shop: session.shop,
+    }
   } satisfies LoaderData;
 };
 
@@ -155,10 +176,20 @@ const EXTRA_FEE_OPTIONS = [
 ];
 
 export default function Onboarding() {
-  const { totalVariants, variantsWithCost, settings } =
+  const { totalVariants, variantsWithCost, settings, ads } =
     useLoaderData() as LoaderData;
   const fetcher = useFetcher();
+  const { revalidate } = useRevalidator();
   const [step, setStep] = useState(0);
+
+  // Auto-refresh ad connection status when returning to this tab
+  useEffect(() => {
+    const onFocus = () => {
+      if (step === 4) revalidate();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [step, revalidate]);
 
   // Fee state
   const [paymentGateway, setPaymentGateway] = useState(settings.paymentGateway);
@@ -174,8 +205,6 @@ export default function Onboarding() {
   const [alertEmail, setAlertEmail] = useState(settings.alertEmail ?? "");
 
   const isSaving = fetcher.state !== "idle";
-  
-  // Adjusted progress calculation to start visually filled on step 0
   const progress = ((step + 1) / STEPS.length) * 100;
 
   const handleGatewayChange = (value: string) => {
@@ -185,8 +214,6 @@ export default function Onboarding() {
       setFeePercent(String(preset.percent));
       setFeeFixed(String(preset.fixed));
     }
-    
-    // Automatically set extra fee to 0 if Shopify Payments is selected
     if (value === "shopify_payments") {
       setExtraFee("0");
     }
@@ -219,6 +246,22 @@ export default function Onboarding() {
       { method: "POST" }
     );
     setStep(4);
+  };
+
+  const handleConnectMeta = () => {
+    const redirectUri = encodeURIComponent(`${ads.appUrl}/connect/meta/callback`);
+    const scopes = encodeURIComponent("ads_read,ads_management,business_management");
+    const state = btoa(ads.shop);
+    const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${ads.metaAppId}&redirect_uri=${redirectUri}&scope=${scopes}&state=${state}&response_type=code`;
+    window.open(url, "_blank");
+  };
+
+  const handleConnectGoogle = () => {
+    window.open(`${ads.appUrl}/connect/google?shop=${ads.shop}`, "_blank");
+  };
+
+  const handleConnectTiktok = () => {
+    window.open(`${ads.appUrl}/connect/tiktok?shop=${ads.shop}`, "_blank");
   };
 
   const StepIndicator = () => (
@@ -305,7 +348,6 @@ export default function Onboarding() {
                     title: "Ad spend integration",
                     body: "Connect Meta, TikTok and Google Ads to include advertising costs in your per-order profit.",
                   },
-                  
                 ].map(({ icon, title, body }) => (
                   <div key={title} style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
                     <span style={{ fontSize: "20px", lineHeight: "24px", flexShrink: 0 }}>{icon}</span>
@@ -506,26 +548,27 @@ export default function Onboarding() {
               />
 
               {alertEnabled && (
-                <TextField
-                  label="Alert when margin drops below (%)"
-                  value={alertMargin}
-                  onChange={setAlertMargin}
-                  type="number"
-                  suffix="%"
-                  helpText="Set to 0 for negative orders only. Set e.g. 10 to be alerted when margin drops below 10%."
-                  autoComplete="off"
-                />
+                <>
+                  <TextField
+                    label="Alert when margin drops below (%)"
+                    value={alertMargin}
+                    onChange={setAlertMargin}
+                    type="number"
+                    suffix="%"
+                    helpText="Set to 0 for negative orders only. Set e.g. 10 to be alerted when margin drops below 10%."
+                    autoComplete="off"
+                  />
+                  <TextField
+                    label="Alert email address(es)"
+                    value={alertEmail}
+                    onChange={setAlertEmail}
+                    type="email"
+                    placeholder="you@example.com, colleague@example.com"
+                    helpText="Separate multiple addresses with a comma. You can also configure this later in Settings."
+                    autoComplete="off"
+                  />
+                </>
               )}
-
-              <TextField
-                label="Alert email address(es)"
-                value={alertEmail}
-                onChange={setAlertEmail}
-                type="email"
-                placeholder="you@example.com, colleague@example.com"
-                helpText="Separate multiple addresses with a comma. You can also configure this later in Settings."
-                autoComplete="off"
-              />
 
               <Divider />
 
@@ -537,23 +580,22 @@ export default function Onboarding() {
               />
 
               {holdEnabled && (
-                <TextField
-                  label="Hold when margin drops below (%)"
-                  value={holdMargin}
-                  onChange={setHoldMargin}
-                  type="number"
-                  suffix="%"
-                  helpText="Set to 0 to only hold orders that lose money."
-                  autoComplete="off"
-                />
-              )}
-
-              {holdEnabled && (
-                <Banner tone="info">
-                  <Text as="p" variant="bodySm">
-                    Held orders appear in the dashboard under <strong>Pending holds</strong>. You can release or cancel them from there.
-                  </Text>
-                </Banner>
+                <>
+                  <TextField
+                    label="Hold when margin drops below (%)"
+                    value={holdMargin}
+                    onChange={setHoldMargin}
+                    type="number"
+                    suffix="%"
+                    helpText="Set to 0 to only hold orders that lose money."
+                    autoComplete="off"
+                  />
+                  <Banner tone="info">
+                    <Text as="p" variant="bodySm">
+                      Held orders appear in the dashboard under <strong>Pending holds</strong>. You can release or cancel them from there.
+                    </Text>
+                  </Banner>
+                </>
               )}
             </BlockStack>
 
@@ -567,6 +609,9 @@ export default function Onboarding() {
 
   // ── STEP 4: Ad Spend ─────────────────────────────────────────────────────────
   if (step === 4) {
+    const hasAnyConnection = ads.metaConnected || ads.googleConnected || ads.tiktokConnected;
+    const nextLabel = hasAnyConnection ? "Continue" : "Skip for now";
+
     return (
       <Page narrowWidth>
         <StepIndicator />
@@ -577,7 +622,7 @@ export default function Onboarding() {
                 Ad spend
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                Running ads on Meta or Google? Include those costs in your per-order profit calculation.
+                Running ads on Meta, Google, or TikTok? Link your ad accounts to include marketing costs in your per-order profit calculation.
               </Text>
             </BlockStack>
 
@@ -599,25 +644,63 @@ export default function Onboarding() {
                 </BlockStack>
               </Banner>
 
-              <BlockStack gap="200">
-                {[
-                  { icon: "📘", label: "Meta Ads (Facebook / Instagram)" },
-                  { icon: "🔍", label: "Google Ads" },
-                ].map(({ icon, label }) => (
-                  <div key={label} style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                    <span style={{ fontSize: "18px" }}>{icon}</span>
-                    <Text as="p" variant="bodyMd" fontWeight="semibold">{label}</Text>
-                  </div>
-                ))}
+              <BlockStack gap="400" align="center">
+                {/* Meta Box */}
+                <Box padding="400" background="bg-surface-secondary" borderRadius="200" borderWidth="025" borderColor="border">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <span style={{ fontSize: "24px" }}>📘</span>
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">Meta Ads</Text>
+                    </div>
+                    {ads.metaConnected ? (
+                      <Badge tone="success" icon={CheckCircleIcon}>Linked successfully</Badge>
+                    ) : (
+                      <Button size="slim" onClick={handleConnectMeta}>Connect account</Button>
+                    )}
+                  </InlineStack>
+                </Box>
+
+                {/* Google Box */}
+                <Box padding="400" background="bg-surface-secondary" borderRadius="200" borderWidth="025" borderColor="border">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <span style={{ fontSize: "24px" }}>🔍</span>
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">Google Ads</Text>
+                    </div>
+                    {ads.googleConnected ? (
+                      <Badge tone="success" icon={CheckCircleIcon}>Linked successfully</Badge>
+                    ) : (
+                      <Button size="slim" onClick={handleConnectGoogle}>Connect account</Button>
+                    )}
+                  </InlineStack>
+                </Box>
+
+                {/* TikTok Box */}
+                <Box padding="400" background="bg-surface-secondary" borderRadius="200" borderWidth="025" borderColor="border">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <span style={{ fontSize: "24px" }}>🎵</span>
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">TikTok Ads</Text>
+                    </div>
+                    {ads.tiktokConnected ? (
+                      <Badge tone="success" icon={CheckCircleIcon}>Linked successfully</Badge>
+                    ) : (
+                      <Button size="slim" onClick={handleConnectTiktok}>Connect account</Button>
+                    )}
+                  </InlineStack>
+                </Box>
               </BlockStack>
 
-              <Text as="p" variant="bodySm" tone="subdued">
-                Connect your ad accounts via <strong>Settings → Ad integrations</strong>. Takes less than 2 minutes per platform and can be done later.
-              </Text>
+              {!hasAnyConnection && (
+                <InlineStack align="center">
+                  <Button variant="plain" onClick={() => revalidate()}>Refresh connection status</Button>
+                </InlineStack>
+              )}
+
             </BlockStack>
 
             <Divider />
-            <NavButtons onNext={() => setStep(5)} nextLabel="Got it, next" />
+            <NavButtons onNext={() => setStep(5)} nextLabel={nextLabel} />
           </BlockStack>
         </Card>
       </Page>
@@ -659,7 +742,7 @@ export default function Onboarding() {
 
           <Banner tone="info">
             <Text as="p" variant="bodySm">
-              <strong>Tip:</strong> Connect Meta or Google Ads via <strong>Settings → Ad integrations</strong> for the most accurate profit numbers.
+              <strong>Tip:</strong> You can always connect or manage your ad accounts later via the <strong>Settings</strong> page.
             </Text>
           </Banner>
 
