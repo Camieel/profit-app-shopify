@@ -24,9 +24,11 @@ interface OrderRow {
   shopifyCreatedAt: string;
   currency: string;
   totalPrice: number;
+  totalDiscounts: number;
   cogs: number;
   transactionFee: number;
   shippingCost: number;
+  adSpendAllocated: number;
   grossProfit: number;
   netProfit: number;
   marginPercent: number;
@@ -38,6 +40,7 @@ interface OrderRow {
 interface Summary {
   totalRevenue: number;
   totalNetProfit: number;
+  totalDiscounts: number;
   avgMargin: number;
   orderCount: number;
   heldCount: number;
@@ -70,6 +73,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const summary: Summary = {
     totalRevenue: orders.reduce((s, o) => s + o.totalPrice, 0),
     totalNetProfit: orders.reduce((s, o) => s + o.netProfit, 0),
+    totalDiscounts: orders.reduce((s, o) => s + o.totalDiscounts, 0),
     avgMargin:
       orders.length > 0
         ? orders.reduce((s, o) => s + o.marginPercent, 0) / orders.length
@@ -102,6 +106,7 @@ function SummaryCard({ summary }: { summary: Summary }) {
     { label: "Revenue", value: formatCurrency(summary.totalRevenue), critical: false },
     { label: "Net Profit", value: formatCurrency(summary.totalNetProfit), critical: summary.totalNetProfit < 0 },
     { label: "Avg Margin", value: summary.avgMargin.toFixed(1) + "%", critical: summary.avgMargin < 0 },
+    { label: "Total Discounts", value: formatCurrency(summary.totalDiscounts), critical: summary.totalDiscounts > 0 },
     { label: "Orders", value: String(summary.orderCount), critical: false },
     { label: "On Hold", value: String(summary.heldCount), critical: summary.heldCount > 0 },
     { label: "Missing COGS", value: String(summary.missingCogsCount), critical: summary.missingCogsCount > 0 },
@@ -152,6 +157,14 @@ export default function OrdersPage() {
 
     formatCurrency(order.totalPrice, order.currency),
 
+    order.totalDiscounts > 0 ? (
+      <Text as="span" tone="caution" key={order.id + "-disc"}>
+        {"-" + formatCurrency(order.totalDiscounts, order.currency)}
+      </Text>
+    ) : (
+      <Text as="span" tone="subdued" key={order.id + "-disc"}>—</Text>
+    ),
+
     order.cogsComplete ? (
       formatCurrency(order.cogs, order.currency)
     ) : (
@@ -164,6 +177,10 @@ export default function OrdersPage() {
 
     formatCurrency(order.transactionFee, order.currency),
     formatCurrency(order.shippingCost, order.currency),
+
+    order.adSpendAllocated > 0
+      ? formatCurrency(order.adSpendAllocated, order.currency)
+      : <Text as="span" tone="subdued" key={order.id + "-ads"}>—</Text>,
 
     <Text
       as="span"
@@ -228,6 +245,8 @@ export default function OrdersPage() {
                     "numeric",
                     "numeric",
                     "numeric",
+                    "numeric",
+                    "numeric",
                     "text",
                     "text",
                   ]}
@@ -235,9 +254,11 @@ export default function OrdersPage() {
                     "Order",
                     "Date",
                     "Revenue",
+                    "Discounts",
                     "COGS",
                     "Fees",
                     "Shipping",
+                    "Ad Spend",
                     "Net Profit",
                     "Margin",
                     "Status",

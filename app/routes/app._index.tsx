@@ -81,6 +81,8 @@ interface RecentOrder {
   id: string;
   shopifyOrderName: string;
   totalPrice: number;
+  totalDiscounts: number;
+  adSpendAllocated: number;
   netProfit: number;
   marginPercent: number;
   isHeld: boolean;
@@ -205,16 +207,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       currency: o.currency,
     })),
     recentOrders: orders30d.slice(0, 5).map((o) => ({
-      id: o.id,
-      shopifyOrderName: o.shopifyOrderName,
-      totalPrice: o.totalPrice,
-      netProfit: o.netProfit,
-      marginPercent: o.marginPercent,
-      isHeld: o.isHeld,
-      cogsComplete: o.cogsComplete,
-      shopifyCreatedAt: o.shopifyCreatedAt.toISOString(),
-      currency: o.currency,
-    })),
+  id: o.id,
+  shopifyOrderName: o.shopifyOrderName,
+  totalPrice: o.totalPrice,
+  totalDiscounts: o.totalDiscounts,
+  adSpendAllocated: o.adSpendAllocated,
+  netProfit: o.netProfit,
+  marginPercent: o.marginPercent,
+  isHeld: o.isHeld,
+  cogsComplete: o.cogsComplete,
+  shopifyCreatedAt: o.shopifyCreatedAt.toISOString(),
+  currency: o.currency,
+})),
     alerts: unresolvedAlerts.map((a) => ({
       id: a.id,
       type: a.type,
@@ -629,60 +633,60 @@ export default function Dashboard() {
                 </Box>
               ) : (
                 <DataTable
-                  columnContentTypes={[
-                    "text",
-                    "text",
-                    "numeric",
-                    "numeric",
-                    "text",
-                    "text",
-                  ]}
-                  headings={[
-                    "Order",
-                    "Date",
-                    "Revenue",
-                    "Net Profit",
-                    "Margin",
-                    "Status",
-                  ]}
-                  rows={recentOrders.map((o) => [
-                    <Text
-                      variant="bodyMd"
-                      fontWeight="semibold"
-                      as="span"
-                      key={o.id}
-                    >
-                      {o.shopifyOrderName}
-                    </Text>,
-                    new Date(o.shopifyCreatedAt).toLocaleDateString("en-GB", {
-                      day: "numeric",
-                      month: "short",
-                    }),
-                    fmt(o.totalPrice, o.currency),
-                    <Text
-                      as="span"
-                      tone={o.netProfit < 0 ? "critical" : undefined}
-                      fontWeight="semibold"
-                      key={o.id + "-profit"}
-                    >
-                      {fmt(o.netProfit, o.currency)}
-                    </Text>,
-                    <MarginBadge
-                      key={o.id + "-margin"}
-                      margin={o.marginPercent}
-                      cogsComplete={o.cogsComplete}
-                    />,
-                    o.isHeld ? (
-                      <Badge tone="warning" key={o.id + "-status"}>
-                        On Hold
-                      </Badge>
-                    ) : (
-                      <Badge tone="success" key={o.id + "-status"}>
-                        Clear
-                      </Badge>
-                    ),
-                  ])}
-                />
+  columnContentTypes={[
+    "text",
+    "text",
+    "numeric",
+    "numeric",
+    "numeric",
+    "text",
+    "text",
+  ]}
+  headings={[
+    "Order",
+    "Date",
+    "Revenue",
+    "Discounts",
+    "Net Profit",
+    "Margin",
+    "Status",
+  ]}
+  rows={recentOrders.map((o) => [
+    <Text variant="bodyMd" fontWeight="semibold" as="span" key={o.id}>
+      {o.shopifyOrderName}
+    </Text>,
+    new Date(o.shopifyCreatedAt).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+    }),
+    fmt(o.totalPrice, o.currency),
+    o.totalDiscounts > 0 ? (
+      <Text as="span" tone="caution" key={o.id + "-disc"}>
+        {"-" + fmt(o.totalDiscounts, o.currency)}
+      </Text>
+    ) : (
+      <Text as="span" tone="subdued" key={o.id + "-disc"}>—</Text>
+    ),
+    <Text
+      as="span"
+      tone={o.netProfit < 0 ? "critical" : undefined}
+      fontWeight="semibold"
+      key={o.id + "-profit"}
+    >
+      {fmt(o.netProfit, o.currency)}
+    </Text>,
+    <MarginBadge
+      key={o.id + "-margin"}
+      margin={o.marginPercent}
+      cogsComplete={o.cogsComplete}
+    />,
+    o.isHeld ? (
+      <Badge tone="warning" key={o.id + "-status"}>On Hold</Badge>
+    ) : (
+      <Badge tone="success" key={o.id + "-status"}>Clear</Badge>
+    ),
+  ])}
+/>
               )}
             </Card>
           </Layout.Section>
