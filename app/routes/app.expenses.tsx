@@ -38,6 +38,7 @@ interface Expense {
   startDate: string;
   endDate: string | null;
   isActive: boolean;
+  [key: string]: any; // <- Dit vertelt TypeScript dat Polaris extra velden mag uitlezen
 }
 
 interface ImportResult {
