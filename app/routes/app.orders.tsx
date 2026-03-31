@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useNavigation, useSearchParams } from "react-router";
@@ -18,12 +17,17 @@ import {
   SkeletonPage,
   SkeletonBodyText,
   SkeletonDisplayText,
+  Button,
+  InlineGrid,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
+const PAGE_SIZE = 25;
+
 interface OrderRow {
   id: string;
+  shopifyOrderId: string;
   shopifyOrderName: string;
   shopifyCreatedAt: string;
   currency: string;
@@ -56,6 +60,12 @@ interface LoaderData {
   orders: OrderRow[];
   summary: Summary;
   range: string;
+  status: string;
+  profitability: string;
+  page: number;
+  totalPages: number;
+  totalCount: number;
+  shop: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -64,36 +74,106 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const url = new URL(request.url);
   const range = url.searchParams.get("range") || "30";
+  const status = url.searchParams.get("status") || "all";
+  const profitability = url.searchParams.get("profitability") || "all";
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
   const days = parseInt(range, 10);
 
   const since = new Date();
   since.setDate(since.getDate() - days);
 
+  // Build where clause
+  const where: any = { shop, shopifyCreatedAt: { gte: since } };
+
+  if (status === "held") {
+    where.isHeld = true;
+  } else if (status === "refunded") {
+    where.financialStatus = { in: ["refunded", "partially_refunded"] };
+  } else if (status === "clear") {
+    where.isHeld = false;
+    where.financialStatus = { notIn: ["refunded", "partially_refunded"] };
+  }
+
+  if (profitability === "profitable") {
+    where.netProfit = { gte: 0 };
+  } else if (profitability === "loss") {
+    where.netProfit = { lt: 0 };
+  }
+
+  // Get total count for pagination
+  const totalCount = await db.order.count({ where });
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+
+  // Fetch paginated orders
   const orders = await db.order.findMany({
-    where: { shop, shopifyCreatedAt: { gte: since } },
+    where,
     orderBy: { shopifyCreatedAt: "desc" },
-    take: 100,
+    skip: (currentPage - 1) * PAGE_SIZE,
+    take: PAGE_SIZE,
+  });
+
+  // Summary is always over the full period (no pagination)
+  const allOrders = await db.order.findMany({
+    where: { shop, shopifyCreatedAt: { gte: since } },
+    select: {
+      totalPrice: true,
+      netProfit: true,
+      marginPercent: true,
+      totalDiscounts: true,
+      isHeld: true,
+      cogsComplete: true,
+      financialStatus: true,
+    },
   });
 
   const summary: Summary = {
-    totalRevenue: orders.reduce((s, o) => s + o.totalPrice, 0),
-    totalNetProfit: orders.reduce((s, o) => s + o.netProfit, 0),
-    totalDiscounts: orders.reduce((s, o) => s + o.totalDiscounts, 0),
+    totalRevenue: allOrders.reduce((s, o) => s + o.totalPrice, 0),
+    totalNetProfit: allOrders.reduce((s, o) => s + o.netProfit, 0),
+    totalDiscounts: allOrders.reduce((s, o) => s + o.totalDiscounts, 0),
     avgMargin:
-      orders.length > 0
-        ? orders.reduce((s, o) => s + o.marginPercent, 0) / orders.length
+      allOrders.length > 0
+        ? allOrders.reduce((s, o) => s + o.marginPercent, 0) / allOrders.length
         : 0,
-    orderCount: orders.length,
-    heldCount: orders.filter((o) => o.isHeld).length,
-    missingCogsCount: orders.filter((o) => !o.cogsComplete).length,
-    refundedCount: orders.filter(
+    orderCount: allOrders.length,
+    heldCount: allOrders.filter((o) => o.isHeld).length,
+    missingCogsCount: allOrders.filter((o) => !o.cogsComplete).length,
+    refundedCount: allOrders.filter(
       (o) =>
         o.financialStatus === "refunded" ||
         o.financialStatus === "partially_refunded"
     ).length,
   };
 
-  return json({ orders, summary, range });
+  return json({
+    orders: orders.map((o) => ({
+      id: o.id,
+      shopifyOrderId: o.shopifyOrderId,
+      shopifyOrderName: o.shopifyOrderName,
+      shopifyCreatedAt: o.shopifyCreatedAt.toISOString(),
+      currency: o.currency,
+      totalPrice: o.totalPrice,
+      totalDiscounts: o.totalDiscounts,
+      cogs: o.cogs,
+      transactionFee: o.transactionFee,
+      shippingCost: o.shippingCost,
+      adSpendAllocated: o.adSpendAllocated,
+      grossProfit: o.grossProfit,
+      netProfit: o.netProfit,
+      marginPercent: o.marginPercent,
+      isHeld: o.isHeld,
+      cogsComplete: o.cogsComplete,
+      financialStatus: o.financialStatus,
+    })),
+    summary,
+    range,
+    status,
+    profitability,
+    page: currentPage,
+    totalPages,
+    totalCount,
+    shop,
+  });
 };
 
 function formatCurrency(amount: number, currency = "USD") {
@@ -116,9 +196,13 @@ function statusBadge(isHeld: boolean, financialStatus: string | null) {
     return <Badge tone="critical">Refunded</Badge>;
   if (financialStatus === "partially_refunded")
     return <Badge tone="warning">Partial Refund</Badge>;
-  if (isHeld)
-    return <Badge tone="warning">On Hold</Badge>;
+  if (isHeld) return <Badge tone="warning">On Hold</Badge>;
   return <Badge tone="success">Clear</Badge>;
+}
+
+function getShopifyOrderUrl(shop: string, shopifyOrderId: string) {
+  const numericId = shopifyOrderId.replace("gid://shopify/Order/", "");
+  return `https://${shop}/admin/orders/${numericId}`;
 }
 
 function OrdersSkeleton() {
@@ -136,7 +220,7 @@ function OrdersSkeleton() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <SkeletonBodyText lines={8} />
+              <SkeletonBodyText lines={10} />
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -180,21 +264,42 @@ function SummaryCard({ summary }: { summary: Summary }) {
 }
 
 export default function OrdersPage() {
-  const { orders, summary, range } = useLoaderData() as LoaderData;
+  const {
+    orders,
+    summary,
+    range,
+    status,
+    profitability,
+    page,
+    totalPages,
+    totalCount,
+    shop,
+  } = useLoaderData() as LoaderData;
+
   const [searchParams, setSearchParams] = useSearchParams();
   const navigation = useNavigation();
   const isLoading = navigation.state === "loading";
 
   if (isLoading) return <OrdersSkeleton />;
 
-  const handleRangeChange = (value: string) => {
-    setSearchParams({ range: value });
+  const updateParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set(key, value);
+    // Reset to page 1 when filters change
+    if (key !== "page") next.set("page", "1");
+    setSearchParams(next);
   };
 
   const rows = orders.map((order) => [
-    <Text variant="bodyMd" fontWeight="semibold" as="span" key={order.id}>
+    // Clickable order name → Shopify admin
+    <Button
+      key={order.id + "-name"}
+      variant="plain"
+      url={getShopifyOrderUrl(shop, order.shopifyOrderId)}
+      external
+    >
       {order.shopifyOrderName}
-    </Text>,
+    </Button>,
 
     <Text variant="bodySm" as="span" tone="subdued" key={order.id + "-date"}>
       {new Date(order.shopifyCreatedAt).toLocaleDateString("en-GB", {
@@ -248,39 +353,62 @@ export default function OrdersPage() {
   return (
     <Page title="Orders">
       <Layout>
+        {/* Filters row */}
         <Layout.Section>
-          <InlineStack align="end">
-            <Box width="160px">
+          <Card>
+            <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
               <Select
                 label="Period"
-                labelInline
                 options={[
                   { label: "Last 7 days", value: "7" },
                   { label: "Last 30 days", value: "30" },
                   { label: "Last 90 days", value: "90" },
                 ]}
                 value={range}
-                onChange={handleRangeChange}
+                onChange={(v) => updateParam("range", v)}
               />
-            </Box>
-          </InlineStack>
+              <Select
+                label="Status"
+                options={[
+                  { label: "All statuses", value: "all" },
+                  { label: "On Hold", value: "held" },
+                  { label: "Refunded", value: "refunded" },
+                  { label: "Clear", value: "clear" },
+                ]}
+                value={status}
+                onChange={(v) => updateParam("status", v)}
+              />
+              <Select
+                label="Profitability"
+                options={[
+                  { label: "All orders", value: "all" },
+                  { label: "Profitable only", value: "profitable" },
+                  { label: "Losses only", value: "loss" },
+                ]}
+                value={profitability}
+                onChange={(v) => updateParam("profitability", v)}
+              />
+            </InlineGrid>
+          </Card>
         </Layout.Section>
 
+        {/* Summary */}
         <Layout.Section>
           <SummaryCard summary={summary} />
         </Layout.Section>
 
+        {/* Table */}
         <Layout.Section>
           <Card padding="0">
             {orders.length === 0 ? (
               <EmptyState
-                heading="No orders in this period"
+                heading="No orders match your filters"
                 image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
               >
-                <p>Orders will appear here as they come in. Try selecting a longer period above.</p>
+                <p>Try adjusting the period or filters above.</p>
               </EmptyState>
             ) : (
-              <BlockStack gap="200">
+              <BlockStack gap="0">
                 <DataTable
                   columnContentTypes={[
                     "text",
@@ -310,10 +438,40 @@ export default function OrdersPage() {
                   ]}
                   rows={rows}
                 />
-                <Box padding="400">
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    {"Showing up to 100 orders. Margins marked ⚠ have incomplete COGS — go to Products to fix."}
-                  </Text>
+
+                {/* Footer: info + pagination */}
+                <Box
+                  padding="400"
+                  borderBlockStartWidth="025"
+                  borderColor="border"
+                >
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="bodySm" as="p" tone="subdued">
+                      {`Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalCount)} of ${totalCount} orders`}
+                      {summary.missingCogsCount > 0
+                        ? " · Margins marked ⚠ have incomplete COGS"
+                        : ""}
+                    </Text>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text variant="bodySm" as="span" tone="subdued">
+                        {`Page ${page} of ${totalPages}`}
+                      </Text>
+                      <Button
+                        disabled={page <= 1}
+                        onClick={() => updateParam("page", String(page - 1))}
+                        size="slim"
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        disabled={page >= totalPages}
+                        onClick={() => updateParam("page", String(page + 1))}
+                        size="slim"
+                      >
+                        Next
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
                 </Box>
               </BlockStack>
             )}
