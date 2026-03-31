@@ -19,6 +19,9 @@ import {
   Modal,
   Checkbox,
   DataTable,
+  SkeletonPage,
+  SkeletonBodyText,
+  SkeletonDisplayText,
 } from "@shopify/polaris";
 import {
   LineChart,
@@ -87,6 +90,7 @@ interface RecentOrder {
   marginPercent: number;
   isHeld: boolean;
   cogsComplete: boolean;
+  financialStatus: string | null;
   shopifyCreatedAt: string;
   currency: string;
 }
@@ -106,6 +110,7 @@ interface LoaderData {
   alerts: AlertItem[];
   missingCogsCount: number;
   visibleCards: CardId[];
+  hasOrders: boolean;
   shop: string;
 }
 
@@ -116,7 +121,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const [orders30d, heldOrders, unresolvedAlerts, missingCogs, settings, expenses] =
+  const [orders30d, heldOrders, unresolvedAlerts, missingCogs, settings, expenses, totalOrderCount] =
     await Promise.all([
       db.order.findMany({
         where: { shop, shopifyCreatedAt: { gte: thirtyDaysAgo } },
@@ -137,17 +142,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }),
       db.shopSettings.findUnique({ where: { shop } }),
       (db as any).expense?.findMany({
-  where: { shop, isActive: true },
-}).catch(() => []),
+        where: { shop, isActive: true },
+      }).catch(() => []),
+      db.order.count({ where: { shop } }),
     ]);
 
   const totalRevenue = orders30d.reduce((s, o) => s + o.totalPrice, 0);
   const ordersNetProfit = orders30d.reduce((s, o) => s + o.netProfit, 0);
   const monthlyExpenses = (expenses ?? []).reduce(
-  (s: number, e: { amount: number; interval: string }) =>
-    s + toMonthly(e.amount, e.interval),
-  0
-);
+    (s: number, e: { amount: number; interval: string }) =>
+      s + toMonthly(e.amount, e.interval),
+    0
+  );
   const totalNetProfit = ordersNetProfit - monthlyExpenses;
   const avgMargin =
     orders30d.length > 0
@@ -207,18 +213,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       currency: o.currency,
     })),
     recentOrders: orders30d.slice(0, 5).map((o) => ({
-  id: o.id,
-  shopifyOrderName: o.shopifyOrderName,
-  totalPrice: o.totalPrice,
-  totalDiscounts: o.totalDiscounts,
-  adSpendAllocated: o.adSpendAllocated,
-  netProfit: o.netProfit,
-  marginPercent: o.marginPercent,
-  isHeld: o.isHeld,
-  cogsComplete: o.cogsComplete,
-  shopifyCreatedAt: o.shopifyCreatedAt.toISOString(),
-  currency: o.currency,
-})),
+      id: o.id,
+      shopifyOrderName: o.shopifyOrderName,
+      totalPrice: o.totalPrice,
+      totalDiscounts: o.totalDiscounts,
+      adSpendAllocated: o.adSpendAllocated,
+      netProfit: o.netProfit,
+      marginPercent: o.marginPercent,
+      isHeld: o.isHeld,
+      cogsComplete: o.cogsComplete,
+      financialStatus: o.financialStatus,
+      shopifyCreatedAt: o.shopifyCreatedAt.toISOString(),
+      currency: o.currency,
+    })),
     alerts: unresolvedAlerts.map((a) => ({
       id: a.id,
       type: a.type,
@@ -227,6 +234,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })),
     missingCogsCount: missingCogs,
     visibleCards,
+    hasOrders: totalOrderCount > 0,
     shop,
   });
 };
@@ -314,6 +322,52 @@ function MarginBadge({
   return <Badge tone="success">{margin.toFixed(1) + "%"}</Badge>;
 }
 
+function StatusBadge({
+  isHeld,
+  financialStatus,
+}: {
+  isHeld: boolean;
+  financialStatus: string | null;
+}) {
+  if (financialStatus === "refunded")
+    return <Badge tone="critical">Refunded</Badge>;
+  if (financialStatus === "partially_refunded")
+    return <Badge tone="warning">Partial Refund</Badge>;
+  if (isHeld) return <Badge tone="warning">On Hold</Badge>;
+  return <Badge tone="success">Clear</Badge>;
+}
+
+function DashboardSkeleton() {
+  return (
+    <SkeletonPage title="Dashboard">
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <SkeletonDisplayText size="small" />
+              <SkeletonBodyText lines={2} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <SkeletonBodyText lines={8} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <SkeletonBodyText lines={5} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </SkeletonPage>
+  );
+}
+
 export default function Dashboard() {
   const {
     summary,
@@ -323,11 +377,13 @@ export default function Dashboard() {
     alerts,
     missingCogsCount,
     visibleCards: initialVisibleCards,
+    hasOrders,
     shop,
   } = useLoaderData() as LoaderData;
 
   const submit = useSubmit();
   const navigation = useNavigation();
+  const isLoading = navigation.state === "loading";
   const isSubmitting = navigation.state === "submitting";
 
   const [visibleCards, setVisibleCards] = useState<CardId[]>(initialVisibleCards);
@@ -336,6 +392,40 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
+
+  if (isLoading) return <DashboardSkeleton />;
+
+  // Empty state for brand new merchants with no orders yet
+  if (!hasOrders) {
+    return (
+      <Page title="Dashboard">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <EmptyState
+                heading="ClearProfit is ready to go"
+                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                action={{
+                  content: "Set up product costs",
+                  url: "/app/products",
+                }}
+                secondaryAction={{
+                  content: "Configure settings",
+                  url: "/app/settings",
+                }}
+              >
+                <p>
+                  Your first order will be calculated automatically the moment
+                  it comes in. In the meantime, make sure your product costs
+                  are set up so margins are accurate from day one.
+                </p>
+              </EmptyState>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
   const isVisible = (id: CardId) => visibleCards.includes(id);
 
@@ -628,65 +718,70 @@ export default function Dashboard() {
               {recentOrders.length === 0 ? (
                 <Box padding="400">
                   <Text as="p" tone="subdued">
-                    No orders yet. Orders will appear here as they come in.
+                    No orders in the last 30 days.
                   </Text>
                 </Box>
               ) : (
                 <DataTable
-  columnContentTypes={[
-    "text",
-    "text",
-    "numeric",
-    "numeric",
-    "numeric",
-    "text",
-    "text",
-  ]}
-  headings={[
-    "Order",
-    "Date",
-    "Revenue",
-    "Discounts",
-    "Net Profit",
-    "Margin",
-    "Status",
-  ]}
-  rows={recentOrders.map((o) => [
-    <Text variant="bodyMd" fontWeight="semibold" as="span" key={o.id}>
-      {o.shopifyOrderName}
-    </Text>,
-    new Date(o.shopifyCreatedAt).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-    }),
-    fmt(o.totalPrice, o.currency),
-    o.totalDiscounts > 0 ? (
-      <Text as="span" tone="caution" key={o.id + "-disc"}>
-        {"-" + fmt(o.totalDiscounts, o.currency)}
-      </Text>
-    ) : (
-      <Text as="span" tone="subdued" key={o.id + "-disc"}>—</Text>
-    ),
-    <Text
-      as="span"
-      tone={o.netProfit < 0 ? "critical" : undefined}
-      fontWeight="semibold"
-      key={o.id + "-profit"}
-    >
-      {fmt(o.netProfit, o.currency)}
-    </Text>,
-    <MarginBadge
-      key={o.id + "-margin"}
-      margin={o.marginPercent}
-      cogsComplete={o.cogsComplete}
-    />,
-    o.isHeld ? (
-      <Badge tone="warning" key={o.id + "-status"}>On Hold</Badge>
-    ) : (
-      <Badge tone="success" key={o.id + "-status"}>Clear</Badge>
-    ),
-  ])}
-/>
+                  columnContentTypes={[
+                    "text",
+                    "text",
+                    "numeric",
+                    "numeric",
+                    "numeric",
+                    "text",
+                    "text",
+                  ]}
+                  headings={[
+                    "Order",
+                    "Date",
+                    "Revenue",
+                    "Discounts",
+                    "Net Profit",
+                    "Margin",
+                    "Status",
+                  ]}
+                  rows={recentOrders.map((o) => [
+                    <Text
+                      variant="bodyMd"
+                      fontWeight="semibold"
+                      as="span"
+                      key={o.id}
+                    >
+                      {o.shopifyOrderName}
+                    </Text>,
+                    new Date(o.shopifyCreatedAt).toLocaleDateString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                    }),
+                    fmt(o.totalPrice, o.currency),
+                    o.totalDiscounts > 0 ? (
+                      <Text as="span" tone="caution" key={o.id + "-disc"}>
+                        {"-" + fmt(o.totalDiscounts, o.currency)}
+                      </Text>
+                    ) : (
+                      <Text as="span" tone="subdued" key={o.id + "-disc"}>—</Text>
+                    ),
+                    <Text
+                      as="span"
+                      tone={o.netProfit < 0 ? "critical" : undefined}
+                      fontWeight="semibold"
+                      key={o.id + "-profit"}
+                    >
+                      {fmt(o.netProfit, o.currency)}
+                    </Text>,
+                    <MarginBadge
+                      key={o.id + "-margin"}
+                      margin={o.marginPercent}
+                      cogsComplete={o.cogsComplete}
+                    />,
+                    <StatusBadge
+                      key={o.id + "-status"}
+                      isHeld={o.isHeld}
+                      financialStatus={o.financialStatus}
+                    />,
+                  ])}
+                />
               )}
             </Card>
           </Layout.Section>

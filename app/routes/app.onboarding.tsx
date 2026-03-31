@@ -296,8 +296,9 @@ export default function Onboarding() {
                   {
                     icon: "📢",
                     title: "Ad spend integration",
-                    body: "Connect Meta and Google Ads to include advertising costs in your per-order profit.",
+                    body: "Connect Meta, TikTok and Google Ads to include advertising costs in your per-order profit.",
                   },
+                  
                 ].map(({ icon, title, body }) => (
                   <div key={title} style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
                     <span style={{ fontSize: "20px", lineHeight: "24px", flexShrink: 0 }}>{icon}</span>

@@ -1,3 +1,5 @@
+// app/routes/connect.meta.callback.tsx
+
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
 import db from "../db.server";

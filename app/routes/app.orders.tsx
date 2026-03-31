@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData, useNavigation, useSearchParams } from "react-router";
 import {
   Page,
   Layout,
@@ -14,6 +15,9 @@ import {
   BlockStack,
   Tooltip,
   EmptyState,
+  SkeletonPage,
+  SkeletonBodyText,
+  SkeletonDisplayText,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -45,6 +49,7 @@ interface Summary {
   orderCount: number;
   heldCount: number;
   missingCogsCount: number;
+  refundedCount: number;
 }
 
 interface LoaderData {
@@ -81,6 +86,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderCount: orders.length,
     heldCount: orders.filter((o) => o.isHeld).length,
     missingCogsCount: orders.filter((o) => !o.cogsComplete).length,
+    refundedCount: orders.filter(
+      (o) =>
+        o.financialStatus === "refunded" ||
+        o.financialStatus === "partially_refunded"
+    ).length,
   };
 
   return json({ orders, summary, range });
@@ -101,6 +111,40 @@ function marginBadge(margin: number, cogsComplete: boolean) {
   return <Badge tone="success">{margin.toFixed(1) + "%"}</Badge>;
 }
 
+function statusBadge(isHeld: boolean, financialStatus: string | null) {
+  if (financialStatus === "refunded")
+    return <Badge tone="critical">Refunded</Badge>;
+  if (financialStatus === "partially_refunded")
+    return <Badge tone="warning">Partial Refund</Badge>;
+  if (isHeld)
+    return <Badge tone="warning">On Hold</Badge>;
+  return <Badge tone="success">Clear</Badge>;
+}
+
+function OrdersSkeleton() {
+  return (
+    <SkeletonPage title="Orders">
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <SkeletonDisplayText size="small" />
+              <SkeletonBodyText lines={1} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <SkeletonBodyText lines={8} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </SkeletonPage>
+  );
+}
+
 function SummaryCard({ summary }: { summary: Summary }) {
   const metrics = [
     { label: "Revenue", value: formatCurrency(summary.totalRevenue), critical: false },
@@ -109,6 +153,7 @@ function SummaryCard({ summary }: { summary: Summary }) {
     { label: "Total Discounts", value: formatCurrency(summary.totalDiscounts), critical: summary.totalDiscounts > 0 },
     { label: "Orders", value: String(summary.orderCount), critical: false },
     { label: "On Hold", value: String(summary.heldCount), critical: summary.heldCount > 0 },
+    { label: "Refunds", value: String(summary.refundedCount), critical: summary.refundedCount > 0 },
     { label: "Missing COGS", value: String(summary.missingCogsCount), critical: summary.missingCogsCount > 0 },
   ];
 
@@ -137,6 +182,10 @@ function SummaryCard({ summary }: { summary: Summary }) {
 export default function OrdersPage() {
   const { orders, summary, range } = useLoaderData() as LoaderData;
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigation = useNavigation();
+  const isLoading = navigation.state === "loading";
+
+  if (isLoading) return <OrdersSkeleton />;
 
   const handleRangeChange = (value: string) => {
     setSearchParams({ range: value });
@@ -193,11 +242,7 @@ export default function OrdersPage() {
 
     marginBadge(order.marginPercent, order.cogsComplete),
 
-    order.isHeld ? (
-      <Badge tone="warning" key={order.id + "-status"}>On Hold</Badge>
-    ) : (
-      <Badge tone="success" key={order.id + "-status"}>Clear</Badge>
-    ),
+    statusBadge(order.isHeld, order.financialStatus),
   ]);
 
   return (
@@ -232,7 +277,7 @@ export default function OrdersPage() {
                 heading="No orders in this period"
                 image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
               >
-                <p>Orders will appear here as they come in.</p>
+                <p>Orders will appear here as they come in. Try selecting a longer period above.</p>
               </EmptyState>
             ) : (
               <BlockStack gap="200">

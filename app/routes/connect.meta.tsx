@@ -1,3 +1,5 @@
+// app/routes/connect.meta.tsx
+
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
