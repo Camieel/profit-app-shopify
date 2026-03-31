@@ -16,6 +16,7 @@ import {
   Divider,
   ProgressBar,
   Badge,
+  Link,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -120,12 +121,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 const STEPS = [
-  "Welkom",
-  "Kostprijzen",
-  "Transactiekosten",
+  "Welcome",
+  "Product Costs",
+  "Transaction Fees",
   "Alerts & Holds",
-  "Advertenties",
-  "Klaar",
+  "Ad Spend",
+  "Done",
+];
+
+// Payment providers with preset defaults
+const GATEWAY_OPTIONS = [
+  { label: "Shopify Payments", value: "shopify_payments", percent: 2.9, fixed: 0.3 },
+  { label: "Stripe", value: "stripe", percent: 2.9, fixed: 0.3 },
+  { label: "PayPal", value: "paypal", percent: 3.49, fixed: 0.49 },
+  { label: "Mollie", value: "mollie", percent: 1.8, fixed: 0.25 },
+  { label: "Klarna", value: "klarna", percent: 2.99, fixed: 0.35 },
+  { label: "Square", value: "square", percent: 2.6, fixed: 0.1 },
+  { label: "Adyen", value: "adyen", percent: 0.3, fixed: 0.12 },
+  { label: "Authorize.net", value: "authorize_net", percent: 2.9, fixed: 0.3 },
+  { label: "Braintree", value: "braintree", percent: 2.59, fixed: 0.49 },
+  { label: "Checkout.com", value: "checkout", percent: 1.9, fixed: 0.2 },
+  { label: "Razorpay", value: "razorpay", percent: 2.0, fixed: 0.0 },
+  { label: "2Checkout (Verifone)", value: "twocheckout", percent: 3.5, fixed: 0.35 },
+  { label: "iDEAL (via Mollie)", value: "ideal", percent: 0.29, fixed: 0.0 },
+  { label: "Other", value: "other", percent: 2.9, fixed: 0.3 },
+];
+
+const EXTRA_FEE_OPTIONS = [
+  { label: "None (Shopify Payments)", value: "0" },
+  { label: "0.5% (Advanced plan)", value: "0.5" },
+  { label: "1.0% (Shopify plan)", value: "1.0" },
+  { label: "2.0% (Basic plan)", value: "2.0" },
 ];
 
 export default function Onboarding() {
@@ -149,6 +175,15 @@ export default function Onboarding() {
 
   const isSaving = fetcher.state !== "idle";
   const progress = (step / (STEPS.length - 1)) * 100;
+
+  const handleGatewayChange = (value: string) => {
+    setPaymentGateway(value);
+    const preset = GATEWAY_OPTIONS.find((g) => g.value === value);
+    if (preset) {
+      setFeePercent(String(preset.percent));
+      setFeeFixed(String(preset.fixed));
+    }
+  };
 
   const handleSaveFees = () => {
     fetcher.submit(
@@ -179,26 +214,12 @@ export default function Onboarding() {
     setStep(4);
   };
 
-  const gatewayOptions = [
-    { label: "Shopify Payments", value: "shopify_payments" },
-    { label: "PayPal", value: "paypal" },
-    { label: "Stripe", value: "stripe" },
-    { label: "Anders", value: "other" },
-  ];
-
-  const extraFeeOptions = [
-    { label: "Geen (Shopify Payments)", value: "0" },
-    { label: "0.5% (Advanced plan)", value: "0.5" },
-    { label: "1.0% (Shopify plan)", value: "1.0" },
-    { label: "2.0% (Basic plan)", value: "2.0" },
-  ];
-
   const StepIndicator = () => (
     <Box paddingBlockEnd="400">
       <BlockStack gap="200">
         <InlineStack align="space-between">
           <Text as="p" variant="bodySm" tone="subdued">
-            Stap {step + 1} van {STEPS.length} — {STEPS[step]}
+            Step {step + 1} of {STEPS.length} — {STEPS[step]}
           </Text>
           <Text as="p" variant="bodySm" tone="subdued">
             {Math.round(progress)}%
@@ -211,9 +232,9 @@ export default function Onboarding() {
 
   const NavButtons = ({
     onNext,
-    nextLabel = "Volgende",
+    nextLabel = "Next",
     showBack = true,
-  }: { 
+  }: {
     onNext: () => void;
     nextLabel?: string;
     showBack?: boolean;
@@ -221,7 +242,7 @@ export default function Onboarding() {
     <InlineStack align="space-between">
       {showBack ? (
         <Button onClick={() => setStep((s) => s - 1)} disabled={isSaving}>
-          Terug
+          Back
         </Button>
       ) : (
         <span />
@@ -232,7 +253,7 @@ export default function Onboarding() {
     </InlineStack>
   );
 
-  // ── STAP 0: Welkom ──────────────────────────────────────────────────────────
+  // ── STEP 0: Welcome ──────────────────────────────────────────────────────────
   if (step === 0) {
     return (
       <Page narrowWidth>
@@ -241,10 +262,10 @@ export default function Onboarding() {
           <BlockStack gap="500">
             <BlockStack gap="100">
               <Text as="h1" variant="headingXl">
-                Welkom bij ClearProfit 👋
+                Welcome to ClearProfit 👋
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                In 5 minuten is alles ingesteld.
+                You'll be up and running in 5 minutes.
               </Text>
             </BlockStack>
 
@@ -252,60 +273,44 @@ export default function Onboarding() {
 
             <BlockStack gap="400">
               <Text as="h2" variant="headingMd">
-                Wat doet ClearProfit?
+                What does ClearProfit do?
               </Text>
 
-              <BlockStack gap="300">
-                <InlineStack gap="300" blockAlign="start">
-                  <Text as="span" variant="bodyLg">📊</Text>
-                  <BlockStack gap="0">
-                    <Text as="p" variant="bodyMd" fontWeight="semibold">
-                      Real-time winstberekening
-                    </Text>
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Elke order wordt direct berekend: omzet min COGS,
-                      transactiekosten, verzending en ad spend.
-                    </Text>
-                  </BlockStack>
-                </InlineStack>
-
-                <InlineStack gap="300" blockAlign="start">
-                  <Text as="span" variant="bodyLg">🛑</Text>
-                  <BlockStack gap="0">
-                    <Text as="p" variant="bodyMd" fontWeight="semibold">
-                      Automatische fulfillment holds
-                    </Text>
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Orders met een te lage marge worden geblokkeerd vóórdat ze
-                      verstuurd worden. Jij beslist wat er daarna mee gebeurt.
-                    </Text>
-                  </BlockStack>
-                </InlineStack>
-
-                <InlineStack gap="300" blockAlign="start">
-                  <Text as="span" variant="bodyLg">🔔</Text>
-                  <BlockStack gap="0">
-                    <Text as="p" variant="bodyMd" fontWeight="semibold">
-                      Alerts bij verliesgevende orders
-                    </Text>
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Krijg een melding zodra een order onder jouw drempel valt.
-                    </Text>
-                  </BlockStack>
-                </InlineStack>
-
-                <InlineStack gap="300" blockAlign="start">
-                  <Text as="span" variant="bodyLg">📢</Text>
-                  <BlockStack gap="0">
-                    <Text as="p" variant="bodyMd" fontWeight="semibold">
-                      Ad spend integratie
-                    </Text>
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Verbind Meta en Google Ads om advertentiekosten mee te
-                      rekenen in de winst per order.
-                    </Text>
-                  </BlockStack>
-                </InlineStack>
+              <BlockStack gap="400">
+                {[
+                  {
+                    icon: "📊",
+                    title: "Real-time profit calculation",
+                    body: "Every order is calculated instantly: revenue minus COGS, transaction fees, shipping, and ad spend.",
+                  },
+                  {
+                    icon: "🛑",
+                    title: "Automatic fulfillment holds",
+                    body: "Orders with a margin below your threshold are blocked before they ship. You decide what happens next.",
+                  },
+                  {
+                    icon: "🔔",
+                    title: "Alerts on unprofitable orders",
+                    body: "Get notified the moment an order falls below your margin threshold.",
+                  },
+                  {
+                    icon: "📢",
+                    title: "Ad spend integration",
+                    body: "Connect Meta and Google Ads to include advertising costs in your per-order profit.",
+                  },
+                ].map(({ icon, title, body }) => (
+                  <div key={title} style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                    <span style={{ fontSize: "20px", lineHeight: "24px", flexShrink: 0 }}>{icon}</span>
+                    <BlockStack gap="0">
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">
+                        {title}
+                      </Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        {body}
+                      </Text>
+                    </BlockStack>
+                  </div>
+                ))}
               </BlockStack>
             </BlockStack>
 
@@ -313,7 +318,7 @@ export default function Onboarding() {
 
             <InlineStack align="end">
               <Button variant="primary" onClick={() => setStep(1)}>
-                Begin instellen →
+                Get started →
               </Button>
             </InlineStack>
           </BlockStack>
@@ -322,7 +327,7 @@ export default function Onboarding() {
     );
   }
 
-  // ── STAP 1: COGS ────────────────────────────────────────────────────────────
+  // ── STEP 1: Product Costs (COGS) ─────────────────────────────────────────────
   if (step === 1) {
     const missingCogs = totalVariants - variantsWithCost;
     const cogsPercent =
@@ -339,11 +344,10 @@ export default function Onboarding() {
           <BlockStack gap="500">
             <BlockStack gap="100">
               <Text as="h1" variant="headingXl">
-                Kostprijzen (COGS)
+                Product costs (COGS)
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                COGS is wat jij betaalt voor een product. Zonder kostprijs telt
-                een variant als €0 mee — waardoor je winst te hoog lijkt.
+                COGS is what you pay for a product. Without a cost price, a variant counts as €0 — making your profit look higher than it really is.
               </Text>
             </BlockStack>
 
@@ -352,24 +356,19 @@ export default function Onboarding() {
             {noProducts ? (
               <Banner tone="warning">
                 <Text as="p" variant="bodySm">
-                  Er zijn nog geen producten gesynchroniseerd. Dat gebeurt
-                  automatisch op de achtergrond. Kom later even terug naar{" "}
-                  <strong>Producten</strong> om kostprijzen te controleren.
+                  No products have been synced yet. This happens automatically in the background. Check the <strong>Products</strong> page later to review and set your cost prices.
                 </Text>
               </Banner>
             ) : (
               <BlockStack gap="300">
                 <Box
-                  background={
-                    allGood ? "bg-surface-success" : "bg-surface-caution"
-                  }
+                  background={allGood ? "bg-surface-success" : "bg-surface-caution"}
                   padding="400"
                   borderRadius="200"
                 >
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="p" variant="bodyMd" fontWeight="semibold">
-                      {variantsWithCost} / {totalVariants} varianten hebben een
-                      kostprijs
+                      {variantsWithCost} / {totalVariants} variants have a cost price
                     </Text>
                     <Badge tone={allGood ? "success" : "warning"}>
                       {cogsPercent + "%"}
@@ -380,10 +379,7 @@ export default function Onboarding() {
                 {!allGood && (
                   <Banner tone="warning">
                     <Text as="p" variant="bodySm">
-                      {missingCogs} variant{missingCogs !== 1 ? "en" : ""}{" "}
-                      mist nog een kostprijs. Stel ze in via de{" "}
-                      <strong>Producten</strong> pagina, of in Shopify zelf via
-                      Producten → variant → <em>Kosten per artikel</em>.
+                      {missingCogs} variant{missingCogs !== 1 ? "s are" : " is"} missing a cost price. You can set them on the <strong>Products</strong> page, or directly in Shopify via Products → variant → <em>Cost per item</em>.
                     </Text>
                   </Banner>
                 )}
@@ -391,8 +387,7 @@ export default function Onboarding() {
                 {allGood && (
                   <Banner tone="success">
                     <Text as="p" variant="bodySm">
-                      Alle varianten hebben een kostprijs. De winstberekening
-                      start meteen accuraat.
+                      All variants have a cost price. Profit calculation will be accurate from the start.
                     </Text>
                   </Banner>
                 )}
@@ -407,7 +402,7 @@ export default function Onboarding() {
     );
   }
 
-  // ── STAP 2: Transactiekosten ─────────────────────────────────────────────────
+  // ── STEP 2: Transaction Fees ─────────────────────────────────────────────────
   if (step === 2) {
     return (
       <Page narrowWidth>
@@ -416,11 +411,10 @@ export default function Onboarding() {
           <BlockStack gap="500">
             <BlockStack gap="100">
               <Text as="h1" variant="headingXl">
-                Transactiekosten
+                Transaction fees
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                Elke betaling kost geld. Stel hier in wat jouw payment processor
-                rekent zodat de app dat van elke order aftrekt.
+                Every payment costs money. Tell us what your payment processor charges so we can deduct it from each order automatically.
               </Text>
             </BlockStack>
 
@@ -429,31 +423,32 @@ export default function Onboarding() {
             <BlockStack gap="400">
               <Select
                 label="Payment processor"
-                options={gatewayOptions}
+                options={GATEWAY_OPTIONS.map((g) => ({ label: g.label, value: g.value }))}
                 value={paymentGateway}
-                onChange={setPaymentGateway}
+                onChange={handleGatewayChange}
+                helpText="Selecting a provider fills in the standard rates. You can adjust them below."
               />
 
               <InlineStack gap="400">
                 <div style={{ flex: 1 }}>
                   <TextField
-                    label="Percentage"
+                    label="Percentage fee"
                     value={feePercent}
                     onChange={setFeePercent}
                     type="number"
                     suffix="%"
-                    helpText="Bijv. 2.9"
+                    helpText="e.g. 2.9"
                     autoComplete="off"
                   />
                 </div>
                 <div style={{ flex: 1 }}>
                   <TextField
-                    label="Vast bedrag per transactie"
+                    label="Fixed fee per transaction"
                     value={feeFixed}
                     onChange={setFeeFixed}
                     type="number"
                     prefix="€"
-                    helpText="Bijv. 0.30"
+                    helpText="e.g. 0.30"
                     autoComplete="off"
                   />
                 </div>
@@ -461,10 +456,10 @@ export default function Onboarding() {
 
               <Select
                 label="Extra Shopify fee"
-                options={extraFeeOptions}
+                options={EXTRA_FEE_OPTIONS}
                 value={extraFee}
                 onChange={setExtraFee}
-                helpText="Shopify rekent extra als je niet hun eigen betaalmethode gebruikt."
+                helpText="Shopify charges an additional fee if you don't use Shopify Payments."
               />
             </BlockStack>
 
@@ -476,7 +471,7 @@ export default function Onboarding() {
     );
   }
 
-  // ── STAP 3: Alerts & Holds ───────────────────────────────────────────────────
+  // ── STEP 3: Alerts & Holds ───────────────────────────────────────────────────
   if (step === 3) {
     return (
       <Page narrowWidth>
@@ -485,11 +480,10 @@ export default function Onboarding() {
           <BlockStack gap="500">
             <BlockStack gap="100">
               <Text as="h1" variant="headingXl">
-                Alerts & Fulfillment Holds
+                Alerts & fulfillment holds
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                Dit is de kern van ClearProfit. Stel in wanneer je gewaarschuwd
-                wilt worden en of orders automatisch tegengehouden moeten worden.
+                This is the core of ClearProfit. Set when you want to be notified and whether orders should be automatically held before shipping.
               </Text>
             </BlockStack>
 
@@ -497,51 +491,51 @@ export default function Onboarding() {
 
             <BlockStack gap="400">
               <Checkbox
-                label="Alerts inschakelen"
-                helpText="Je krijgt een melding in het dashboard als een order onder de drempel valt."
+                label="Enable alerts"
+                helpText="You'll get a notification in the dashboard when an order falls below your threshold."
                 checked={alertEnabled}
                 onChange={setAlertEnabled}
               />
 
               {alertEnabled && (
                 <TextField
-                  label="Alert bij marge onder (%)"
+                  label="Alert when margin drops below (%)"
                   value={alertMargin}
                   onChange={setAlertMargin}
                   type="number"
                   suffix="%"
-                  helpText="Stel 0 in voor alleen negatieve orders. Stel bijv. 10 in om al te waarschuwen als de marge onder 10% valt."
+                  helpText="Set to 0 for negative orders only. Set e.g. 10 to be alerted when margin drops below 10%."
                   autoComplete="off"
                 />
               )}
 
               <TextField
-                label="Alert email (optioneel)"
+                label="Alert email address(es)"
                 value={alertEmail}
                 onChange={setAlertEmail}
                 type="email"
-                placeholder="jouw@email.com"
-                helpText="Ontvang een email bij elke alert. Kan later ook worden ingesteld via Instellingen."
+                placeholder="you@example.com, colleague@example.com"
+                helpText="Separate multiple addresses with a comma. You can also configure this later in Settings."
                 autoComplete="off"
               />
 
               <Divider />
 
               <Checkbox
-                label="Automatische fulfillment hold inschakelen"
-                helpText="Orders met een te lage marge worden geblokkeerd vóór verzending. Je beslist daarna zelf of ze alsnog verstuurd worden."
+                label="Enable automatic fulfillment holds"
+                helpText="Orders with a margin below your threshold will be blocked before they ship. You decide whether to release or cancel them."
                 checked={holdEnabled}
                 onChange={setHoldEnabled}
               />
 
               {holdEnabled && (
                 <TextField
-                  label="Hold bij marge onder (%)"
+                  label="Hold when margin drops below (%)"
                   value={holdMargin}
                   onChange={setHoldMargin}
                   type="number"
                   suffix="%"
-                  helpText="Stel 0 in voor alleen verliesgevende orders."
+                  helpText="Set to 0 to only hold orders that lose money."
                   autoComplete="off"
                 />
               )}
@@ -549,9 +543,7 @@ export default function Onboarding() {
               {holdEnabled && (
                 <Banner tone="info">
                   <Text as="p" variant="bodySm">
-                    Geblokkeerde orders zijn zichtbaar in het dashboard onder{" "}
-                    <strong>Openstaande holds</strong>. Je kunt ze daar
-                    vrijgeven of annuleren.
+                    Held orders appear in the dashboard under <strong>Pending holds</strong>. You can release or cancel them from there.
                   </Text>
                 </Banner>
               )}
@@ -565,7 +557,7 @@ export default function Onboarding() {
     );
   }
 
-  // ── STAP 4: Advertenties ─────────────────────────────────────────────────────
+  // ── STEP 4: Ad Spend ─────────────────────────────────────────────────────────
   if (step === 4) {
     return (
       <Page narrowWidth>
@@ -574,11 +566,10 @@ export default function Onboarding() {
           <BlockStack gap="500">
             <BlockStack gap="100">
               <Text as="h1" variant="headingXl">
-                Advertentiekosten
+                Ad spend
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                Adverteer je op Meta of Google? Dan kun je die kosten meenemen
-                in de winstberekening per order.
+                Running ads on Meta or Google? Include those costs in your per-order profit calculation.
               </Text>
             </BlockStack>
 
@@ -586,41 +577,34 @@ export default function Onboarding() {
 
             <BlockStack gap="300">
               <Text as="p" variant="bodyMd">
-                ClearProfit verdeelt je dagelijkse ad spend proportioneel over
-                alle orders van die dag. Zo zie je wat een order écht kost.
+                ClearProfit distributes your daily ad spend proportionally across all orders from that day. This gives you the true cost of each order.
               </Text>
 
               <Banner tone="info">
                 <BlockStack gap="100">
                   <Text as="p" variant="bodySm" fontWeight="semibold">
-                    Hoe werkt de allocatie?
+                    How does the allocation work?
                   </Text>
                   <Text as="p" variant="bodySm">
-                    Totale dagelijkse ad spend ÷ totale dagomzet × orderwaarde.
-                    Elke order krijgt een evenredig deel van de kosten.
+                    Total daily ad spend ÷ total daily revenue × order value. Each order gets a proportional share of the advertising costs.
                   </Text>
                 </BlockStack>
               </Banner>
 
               <BlockStack gap="200">
-                <InlineStack gap="200" blockAlign="center">
-                  <Text as="span">📘</Text>
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">
-                    Meta Ads (Facebook / Instagram)
-                  </Text>
-                </InlineStack>
-                <InlineStack gap="200" blockAlign="center">
-                  <Text as="span">🔍</Text>
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">
-                    Google Ads
-                  </Text>
-                </InlineStack>
+                {[
+                  { icon: "📘", label: "Meta Ads (Facebook / Instagram)" },
+                  { icon: "🔍", label: "Google Ads" },
+                ].map(({ icon, label }) => (
+                  <div key={label} style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                    <span style={{ fontSize: "18px" }}>{icon}</span>
+                    <Text as="p" variant="bodyMd" fontWeight="semibold">{label}</Text>
+                  </div>
+                ))}
               </BlockStack>
 
               <Text as="p" variant="bodySm" tone="subdued">
-                Verbinden doe je via{" "}
-                <strong>Instellingen → Ad integraties</strong>. Dit duurt minder
-                dan 2 minuten per platform en kan ook later.
+                Connect your ad accounts via <strong>Settings → Ad integrations</strong>. Takes less than 2 minutes per platform and can be done later.
               </Text>
             </BlockStack>
 
@@ -632,7 +616,7 @@ export default function Onboarding() {
     );
   }
 
-  // ── STAP 5: Klaar ────────────────────────────────────────────────────────────
+  // ── STEP 5: Done ─────────────────────────────────────────────────────────────
   return (
     <Page narrowWidth>
       <StepIndicator />
@@ -640,10 +624,10 @@ export default function Onboarding() {
         <BlockStack gap="500">
           <BlockStack gap="100">
             <Text as="h1" variant="headingXl">
-              Je bent klaar! 🎉
+              You're all set! 🎉
             </Text>
             <Text as="p" variant="bodyMd" tone="subdued">
-              ClearProfit is ingesteld en klaar om te draaien.
+              ClearProfit is configured and ready to go.
             </Text>
           </BlockStack>
 
@@ -651,33 +635,23 @@ export default function Onboarding() {
 
           <BlockStack gap="300">
             <Text as="h2" variant="headingMd">
-              Wat gebeurt er nu?
+              What happens now?
             </Text>
             <BlockStack gap="100">
-              <Text as="p" variant="bodyMd">
-                ✅ Elke nieuwe order wordt automatisch berekend
-              </Text>
-              <Text as="p" variant="bodyMd">
-                ✅ Kostprijzen worden gesynchroniseerd vanuit Shopify
-              </Text>
+              <Text as="p" variant="bodyMd">✅ Every new order is automatically calculated</Text>
+              <Text as="p" variant="bodyMd">✅ Cost prices are synced from Shopify</Text>
               {holdEnabled && (
-                <Text as="p" variant="bodyMd">
-                  ✅ Fulfillment holds zijn actief
-                </Text>
+                <Text as="p" variant="bodyMd">✅ Fulfillment holds are active</Text>
               )}
               {alertEnabled && (
-                <Text as="p" variant="bodyMd">
-                  ✅ Alerts zijn ingeschakeld
-                </Text>
+                <Text as="p" variant="bodyMd">✅ Alerts are enabled</Text>
               )}
             </BlockStack>
           </BlockStack>
 
           <Banner tone="info">
             <Text as="p" variant="bodySm">
-              <strong>Tip:</strong> Verbind Meta of Google Ads via{" "}
-              <strong>Instellingen → Ad integraties</strong> voor de meest
-              accurate winstcijfers.
+              <strong>Tip:</strong> Connect Meta or Google Ads via <strong>Settings → Ad integrations</strong> for the most accurate profit numbers.
             </Text>
           </Banner>
 
@@ -687,7 +661,7 @@ export default function Onboarding() {
             <input type="hidden" name="intent" value="complete" />
             <InlineStack align="end">
               <Button variant="primary" submit>
-                Naar het dashboard →
+                Go to dashboard →
               </Button>
             </InlineStack>
           </Form>
