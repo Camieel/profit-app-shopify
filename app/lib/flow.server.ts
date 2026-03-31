@@ -39,12 +39,12 @@ export async function triggerOrderProfitCalculated({
         variables: {
           handle: "order-profit-calculated",
           payload: {
-            order_id: orderId,
-            order_name: orderName,
-            margin_percent: Math.round(marginPercent * 100) / 100,
-            net_profit: Math.round(netProfit * 100) / 100,
-            revenue: Math.round(revenue * 100) / 100,
-            is_loss: isLoss,
+            order_id: orderId, // reference field gebruikt altijd z'n vaste ID
+            "Order Name": orderName,
+            "Margin Percent": Math.round(marginPercent * 100) / 100,
+            "Net Profit": Math.round(netProfit * 100) / 100,
+            "Revenue": Math.round(revenue * 100) / 100,
+            "Is Loss": isLoss,
           },
         },
       }

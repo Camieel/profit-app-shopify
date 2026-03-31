@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { triggerOrderProfitCalculated } from "../lib/flow.server";
+import { sendAlertEmail } from "../lib/email.server";
 
 // Simpele helper om een ID te genereren
 function generateCuid() {
@@ -231,12 +232,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         netProfit < (settings?.alertProfitThreshold ?? 0);
 
       if (belowMargin || belowProfit || netProfit < 0) {
+        const alertType = netProfit < 0 ? "negative_profit" : "low_margin";
+        
         await db.alert.create({
           data: {
-            id: generateCuid(), // Voeg ook hier expliciet een ID toe voor de zekerheid
+            id: generateCuid(),
             shop,
             orderId: savedOrder.id,
-            type: netProfit < 0 ? "negative_profit" : "low_margin",
+            type: alertType,
             message: `Order ${order.name}: ${marginPercent.toFixed(1)}% margin`,
             data: {
               revenue,
@@ -249,6 +252,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             },
           },
         });
+
+        // Verzend de email als er een adres is ingesteld
+        if (settings?.alertEmail) {
+          await sendAlertEmail({
+            to: settings.alertEmail,
+            orderName: order.name,
+            marginPercent,
+            netProfit,
+            revenue,
+            reason: alertType === "negative_profit" ? "Negative Profit (Loss)" : "Margin Below Threshold"
+          });
+        }
       }
     }
   } catch (err) {

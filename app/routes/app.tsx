@@ -1,6 +1,6 @@
 // app/routes/app.tsx
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -10,6 +10,14 @@ import db from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
+
+  const url = new URL(request.url);
+if (!url.pathname.includes("/onboarding")) {
+  const settings = await db.shopSettings.findUnique({ where: { shop: session.shop } });
+  if (settings && !settings.onboardingComplete) {
+    return redirect("/app/onboarding");
+  }
+}
 
   // Ensure Shop + ShopSettings exist on every admin request
   await db.shop.upsert({

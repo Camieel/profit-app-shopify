@@ -1,37 +1,37 @@
-api_version = "2026-06"
+api_version = "2026-04"
 
 [[extensions]]
 name = "Order profit calculated"
 handle = "order-profit-calculated"
+uid = "cb854dd4-ff7d-5e6b-47e4-f5dbe45cb809b5c9c1d6"
 type = "flow_trigger"
 description = "Triggers when a new order is placed and the profit is calculated."
 
 [[extensions.settings.fields]]
-key = "order_id"
-description = "Shopify Order ID"
 type = "order_reference"
+description = "Shopify Order ID"
 
 [[extensions.settings.fields]]
-key = "order_name"
-description = "Order Name (e.g. #1001)"
 type = "single_line_text_field"
+key = "Order Name"
+description = "Order Name (e.g. #1001)"
 
 [[extensions.settings.fields]]
-key = "margin_percent"
+type = "number_decimal"
+key = "Margin Percent"
 description = "Margin Percentage"
-type = "number_decimal"
 
 [[extensions.settings.fields]]
-key = "net_profit"
+type = "number_decimal"
+key = "Net Profit"
 description = "Net Profit"
-type = "number_decimal"
 
 [[extensions.settings.fields]]
-key = "revenue"
+type = "number_decimal"
+key = "Revenue"
 description = "Total Revenue"
-type = "number_decimal"
 
 [[extensions.settings.fields]]
-key = "is_loss"
-description = "Is Loss"
 type = "boolean"
+key = "Is Loss"
+description = "Is Loss"
