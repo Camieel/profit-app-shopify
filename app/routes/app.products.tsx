@@ -1,12 +1,11 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useSubmit, useNavigation, useFetcher, useSearchParams } from "react-router";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   Page,
   Layout,
   Card,
-  DataTable,
   Text,
   Badge,
   Box,
@@ -22,14 +21,17 @@ import {
   Divider,
   SkeletonPage,
   SkeletonBodyText,
-  Select,
-  InlineGrid,
+  IndexTable,
+  useIndexResourceState,
+  Filters,
+  Pagination,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 const PAGE_SIZE = 20;
 
+// ── Interfaces ───────────────────────────────────────────────────────────────
 interface VariantRow {
   id: string;
   shopifyVariantId: string;
@@ -40,6 +42,7 @@ interface VariantRow {
   effectiveCost: number | null;
   productTitle: string;
   productId: string;
+  [key: string]: any; // <- Deze regel lost de error op
 }
 
 interface ProductGroup {
@@ -69,6 +72,7 @@ interface LoaderData {
   shop: string;
 }
 
+// ── Backend: Loader ──────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const { shop } = session;
@@ -149,6 +153,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 };
 
+// ── Backend: Action ──────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
   await authenticate.admin(request);
   const formData = await request.formData();
@@ -175,6 +180,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await db.productVariant.update({
       where: { id: variantId },
       data: { customCost: null, effectiveCost: variant.costPerItem ?? null },
+    });
+    return json({ success: true });
+  }
+
+  // NIEUW: Bulk update actie voor de geselecteerde rijen in de IndexTable
+  if (intent === "bulkUpdateCosts") {
+    const variantIdsRaw = formData.get("variantIds") as string;
+    const costRaw = formData.get("cost") as string;
+    if (!variantIdsRaw || !costRaw) return json({ error: "Missing data" }, { status: 400 });
+
+    const variantIds = JSON.parse(variantIdsRaw) as string[];
+    const customCost = parseFloat(costRaw);
+    if (isNaN(customCost) || customCost < 0) return json({ error: "Invalid cost" }, { status: 400 });
+
+    await db.productVariant.updateMany({
+      where: { id: { in: variantIds } },
+      data: { customCost, effectiveCost: customCost },
     });
     return json({ success: true });
   }
@@ -220,50 +242,49 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
-// ── Edit Cost Modal ──────────────────────────────────────────────────────────
-function EditCostModal({
-  variant, onClose, onSave, isSaving,
-}: {
-  variant: VariantRow | null;
-  onClose: () => void;
-  onSave: (variantId: string, cost: string) => void;
-  isSaving: boolean;
-}) {
-  const [cost, setCost] = useState(
-    variant?.customCost != null ? String(variant.customCost)
-    : variant?.costPerItem != null ? String(variant.costPerItem)
-    : ""
+// ── Frontend: Custom Inline Editing Component ────────────────────────────────
+function InlineCostInput({ variant }: { variant: VariantRow }) {
+  const fetcher = useFetcher();
+  // Gebruik lokale state voor vlotte input, effect triggert opslaan
+  const [value, setValue] = useState(
+    variant.customCost != null ? String(variant.customCost) : 
+    ""
   );
-  if (!variant) return null;
+
+  // Zorg dat het veld update als data van buitenaf (bulk/import) verandert
+  useEffect(() => {
+    setValue(variant.customCost != null ? String(variant.customCost) : "");
+  }, [variant.customCost]);
+
+  const handleBlur = () => {
+    const currentValue = variant.customCost != null ? String(variant.customCost) : "";
+    // Sla alleen op als de waarde écht is veranderd
+    if (value !== currentValue) {
+      fetcher.submit(
+        { intent: "updateCost", variantId: variant.id, customCost: value },
+        { method: "POST" }
+      );
+    }
+  };
+
   return (
-    <Modal
-      open={true}
-      onClose={onClose}
-      title={`Edit cost — ${variant.productTitle} / ${variant.title}`}
-      primaryAction={{ content: "Save", onAction: () => onSave(variant.id, cost), loading: isSaving }}
-      secondaryActions={[{ content: "Cancel", onAction: onClose }]}
-    >
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Text as="p" tone="subdued">
-            Shopify cost: {variant.costPerItem != null ? "$" + variant.costPerItem.toFixed(2) : "Not set"}
-          </Text>
-          <TextField
-            label="Custom cost override"
-            type="number"
-            value={cost}
-            onChange={setCost}
-            prefix="$"
-            autoComplete="off"
-            helpText="Leave empty to use Shopify's cost. Custom cost takes priority."
-          />
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+    <TextField
+      label="Cost"
+      labelHidden
+      type="number"
+      prefix="$"
+      placeholder={variant.costPerItem != null ? String(variant.costPerItem) : "0.00"}
+      value={value}
+      onChange={setValue}
+      onBlur={handleBlur}
+      autoComplete="off"
+      disabled={fetcher.state !== "idle"}
+      size="slim"
+    />
   );
 }
 
-// ── CSV Import Modal ─────────────────────────────────────────────────────────
+// ── Frontend: CSV Import Modal ───────────────────────────────────────────────
 function ImportModal({ open, onClose, shop }: { open: boolean; onClose: () => void; shop: string }) {
   const fetcher = useFetcher();
   const [csvText, setCsvText] = useState("");
@@ -361,7 +382,7 @@ function ImportModal({ open, onClose, shop }: { open: boolean; onClose: () => vo
   );
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+// ── Frontend: Main Page ──────────────────────────────────────────────────────
 export default function ProductsPage() {
   const {
     products, totalVariants, missingCogsCount, totalProducts,
@@ -371,15 +392,70 @@ export default function ProductsPage() {
   const submit = useSubmit();
   const navigation = useNavigation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [searchValue, setSearchValue] = useState(search);
+  const [importOpen, setImportOpen] = useState(false);
+
   const isLoading = navigation.state === "loading";
 
-  const [editingVariant, setEditingVariant] = useState<VariantRow | null>(null);
-  const [importOpen, setImportOpen] = useState(false);
-  const [searchValue, setSearchValue] = useState(search);
+  // 1. Data plat slaan voor de IndexTable (elke rij is een variant)
+  const allVariants = products.flatMap((p) => p.variants);
+  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } = useIndexResourceState(allVariants);
 
-  const isSaving = navigation.state === "submitting";
+  // 2. Auto-submit / Debounce voor zoeken
+  const updateParam = useCallback((key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value && value !== "all") {
+      next.set(key, value);
+    } else {
+      next.delete(key);
+    }
+    if (key !== "page") next.set("page", "1");
+    setSearchParams(next);
+  }, [searchParams, setSearchParams]);
 
-  if (isLoading && !editingVariant && !importOpen) {
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchValue(value);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    searchTimeout.current = setTimeout(() => {
+      updateParam("search", value);
+    }, 500);
+  }, [updateParam]);
+
+  // 3. Filters opzetten
+  const filters = [
+    {
+      key: "missingCogs",
+      label: "COGS Status",
+      filter: (
+        <Button onClick={() => updateParam("filter", filter === "missing" ? "all" : "missing")}>
+          {filter === "missing" ? "Toon alles" : "Alleen missende COGS"}
+        </Button>
+      ),
+      shortcut: true,
+    },
+  ];
+
+  // 4. Bulk Actie
+  const promotedBulkActions = [
+    {
+      content: 'Stel prijs in voor selectie',
+      onAction: () => {
+        const bulkCost = prompt("Welke inkoopprijs wil je instellen voor deze varianten? (bijv. 12.50)");
+        if (bulkCost) {
+          submit(
+            { intent: "bulkUpdateCosts", variantIds: JSON.stringify(selectedResources), cost: bulkCost },
+            { method: "POST" }
+          );
+          clearSelection();
+        }
+      },
+    },
+  ];
+
+  // Render Skeleton tijdens het laden
+  if (isLoading && !searchValue && allVariants.length === 0) {
     return (
       <SkeletonPage title="Products & COGS">
         <Layout>
@@ -394,28 +470,37 @@ export default function ProductsPage() {
     );
   }
 
-  const updateParam = (key: string, value: string) => {
-    const next = new URLSearchParams(searchParams);
-    next.set(key, value);
-    if (key !== "page") next.set("page", "1");
-    setSearchParams(next);
-  };
-
-  const handleSearchSubmit = () => updateParam("search", searchValue);
-
-  const handleSave = (variantId: string, cost: string) => {
-    submit({ intent: "updateCost", variantId, customCost: cost }, { method: "POST" });
-    setEditingVariant(null);
-  };
-
-  const handleClearCustomCost = (variantId: string) => {
-    submit({ intent: "clearCustomCost", variantId }, { method: "POST" });
-  };
-
-  const getShopifyProductUrl = (shopifyProductId: string) => {
-    const numericId = shopifyProductId.replace("gid://shopify/Product/", "");
-    return `https://${shop}/admin/products/${numericId}`;
-  };
+  // Bouw de rijen voor de IndexTable
+  const rowMarkup = allVariants.map((variant, index) => (
+    <IndexTable.Row
+      id={variant.id}
+      key={variant.id}
+      selected={selectedResources.includes(variant.id)}
+      position={index}
+    >
+      <IndexTable.Cell>
+        <Text variant="bodyMd" fontWeight="bold" as="span">{variant.productTitle}</Text>
+        <br />
+        <Text variant="bodySm" tone="subdued" as="span">{variant.title}</Text>
+      </IndexTable.Cell>
+      <IndexTable.Cell>{variant.sku || "—"}</IndexTable.Cell>
+      <IndexTable.Cell>
+        {variant.costPerItem != null ? "$" + variant.costPerItem.toFixed(2) : <Badge tone="attention">Not set</Badge>}
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        <div style={{ maxWidth: '140px' }}>
+          <InlineCostInput variant={variant} />
+        </div>
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        {variant.effectiveCost != null ? (
+          <Text as="span" fontWeight="bold">{"$" + variant.effectiveCost.toFixed(2)}</Text>
+        ) : (
+          <Badge tone="critical">Missing</Badge>
+        )}
+      </IndexTable.Cell>
+    </IndexTable.Row>
+  ));
 
   return (
     <Page
@@ -423,18 +508,13 @@ export default function ProductsPage() {
       primaryAction={{ content: "Import CSV", onAction: () => setImportOpen(true) }}
     >
       <Layout>
-        {/* Warning banner */}
         {missingCogsCount > 0 && (
           <Layout.Section>
             <Banner
-              title={`${missingCogsCount} variant${missingCogsCount > 1 ? "s" : ""} missing cost data`}
+              title={`${missingCogsCount} variant${missingCogsCount > 1 ? "en missen" : " mist"} inkoopprijzen`}
               tone="warning"
             >
-              <p>
-                Orders containing these variants will show incomplete margins.
-                Set a custom cost below, import via CSV, or add cost data in
-                Shopify (Products → variant → Cost per item).
-              </p>
+              <p>Vul ze direct in de tabel hieronder in, of gebruik de CSV import.</p>
             </Banner>
           </Layout.Section>
         )}
@@ -461,124 +541,63 @@ export default function ProductsPage() {
           </Card>
         </Layout.Section>
 
-        {/* Search + Filter */}
         <Layout.Section>
-          <Card>
-            {/* Wikkel je grid in een form. preventDefault stopt de pagina-reload */}
-            <form onSubmit={(e) => { e.preventDefault(); handleSearchSubmit(); }}>
-              <InlineGrid columns={{ xs: 1, sm: "1fr auto auto" }} gap="300">
-                <TextField
-                  label="Search"
-                  labelHidden
-                  placeholder="Search by product name or SKU..."
-                  value={searchValue}
-                  onChange={setSearchValue}
-                  autoComplete="off"
-                  /* onKeyDown is hier verwijderd */
-                  clearButton
-                  onClearButtonClick={() => { 
-                    setSearchValue(""); 
-                    updateParam("search", ""); 
-                  }}
-                />
-                {/* Verander de Button naar een submit-knop */}
-                <Button submit>Search</Button>
-                
-                <Select
-                label="Filter"
-                labelHidden
-                options={[
-                  { label: "All products", value: "all" },
-                  { label: "Missing COGS only", value: "missing" },
-                ]}
-                value={filter}
-                onChange={(v) => updateParam("filter", v)}
+          <Card padding="0">
+            <div style={{ padding: '16px' }}>
+              <Filters
+                queryValue={searchValue}
+                filters={filters}
+appliedFilters={
+  filter === "missing" 
+    ? [{ 
+        key: "missingCogs", 
+        label: "Alleen missende COGS",
+        onRemove: () => updateParam("filter", "all") // <- Vertelt Polaris wat er gebeurt als je op het kruisje klikt
+      }] 
+    : []
+}                onQueryChange={handleSearchChange}
+                onQueryClear={() => handleSearchChange("")}
+                onClearAll={() => updateParam("filter", "all")}
               />
-                </InlineGrid>
-            </form>
+            </div>
+
+            <IndexTable
+              resourceName={{ singular: 'variant', plural: 'varianten' }}
+              itemCount={allVariants.length}
+              selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
+              onSelectionChange={handleSelectionChange}
+              promotedBulkActions={promotedBulkActions}
+              headings={[
+                { title: 'Product & Variant' },
+                { title: 'SKU' },
+                { title: 'Shopify Cost' },
+                { title: 'Custom Cost (Edit)' },
+                { title: 'Effective Cost' },
+              ]}
+              emptyState={
+                <EmptyState
+                  heading={search || filter !== "all" ? "Geen producten matchen met je zoekopdracht" : "Geen producten gevonden"}
+                  image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                />
+              }
+            >
+              {rowMarkup}
+            </IndexTable>
+
+            {totalPages > 1 && (
+              <div style={{ padding: '16px', display: 'flex', justifyContent: 'center', borderTop: '1px solid #ebebeb' }}>
+                <Pagination
+                  hasPrevious={page > 1}
+                  onPrevious={() => updateParam("page", String(page - 1))}
+                  hasNext={page < totalPages}
+                  onNext={() => updateParam("page", String(page + 1))}
+                  label={`Pagina ${page} van ${totalPages} (${totalFilteredProducts} resultaten)`}
+                />
+              </div>
+            )}
           </Card>
         </Layout.Section>
-
-        {/* Products list */}
-        <Layout.Section>
-          {products.length === 0 ? (
-            <Card>
-              <EmptyState
-                heading={search || filter !== "all" ? "No products match your search" : "No products synced yet"}
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              >
-                <p>
-                  {search || filter !== "all"
-                    ? "Try adjusting your search or filter."
-                    : "Products are synced automatically on install."}
-                </p>
-              </EmptyState>
-            </Card>
-          ) : (
-            <BlockStack gap="400">
-              {products.map((product) => (
-                <Card key={product.id} padding="0">
-                  <Box padding="400" borderBlockEndWidth="025" borderColor="border">
-                    <InlineStack align="space-between" blockAlign="center">
-                      <Button variant="plain" url={getShopifyProductUrl(product.shopifyProductId)} external>
-                        {product.title + " ↗"}
-                      </Button>
-                      {product.missingCogs && <Badge tone="warning">Missing COGS</Badge>}
-                    </InlineStack>
-                  </Box>
-                  <DataTable
-                    columnContentTypes={["text", "text", "text", "text", "text", "text"]}
-                    headings={["Variant", "SKU", "Shopify Cost", "Custom Cost", "Effective Cost", "Actions"]}
-                    rows={product.variants.map((variant) => [
-                      <Text variant="bodyMd" as="span" key={variant.id}>{variant.title}</Text>,
-                      <Text variant="bodySm" as="span" tone="subdued" key={variant.id + "-sku"}>{variant.sku || "—"}</Text>,
-                      variant.costPerItem != null
-                        ? "$" + variant.costPerItem.toFixed(2)
-                        : <Badge tone="attention" key={variant.id + "-cost"}>Not set</Badge>,
-                      variant.customCost != null ? (
-                        <InlineStack gap="200" blockAlign="center" key={variant.id + "-custom"}>
-                          <Text as="span">{"$" + variant.customCost.toFixed(2)}</Text>
-                          <Button variant="plain" tone="critical" size="micro" onClick={() => handleClearCustomCost(variant.id)}>Clear</Button>
-                        </InlineStack>
-                      ) : (
-                        <Text as="span" tone="subdued" key={variant.id + "-custom"}>—</Text>
-                      ),
-                      variant.effectiveCost != null
-                        ? <Text as="span" fontWeight="semibold" key={variant.id + "-eff"}>{"$" + variant.effectiveCost.toFixed(2)}</Text>
-                        : <Badge tone="critical" key={variant.id + "-eff"}>Missing</Badge>,
-                      <Button key={variant.id + "-edit"} size="slim" onClick={() => setEditingVariant(variant)}>Edit cost</Button>,
-                    ])}
-                  />
-                </Card>
-              ))}
-
-              {/* Pagination */}
-              <Card>
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    {`Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalFilteredProducts)} of ${totalFilteredProducts} products`}
-                  </Text>
-                  <InlineStack gap="200" blockAlign="center">
-                    <Text variant="bodySm" as="span" tone="subdued">
-                      {`Page ${page} of ${totalPages}`}
-                    </Text>
-                    <Button disabled={page <= 1} onClick={() => updateParam("page", String(page - 1))} size="slim">Previous</Button>
-                    <Button disabled={page >= totalPages} onClick={() => updateParam("page", String(page + 1))} size="slim">Next</Button>
-                  </InlineStack>
-                </InlineStack>
-              </Card>
-            </BlockStack>
-          )}
-        </Layout.Section>
       </Layout>
-
-      <EditCostModal
-        key={editingVariant?.id ?? "none"}
-        variant={editingVariant}
-        onClose={() => setEditingVariant(null)}
-        onSave={handleSave}
-        isSaving={isSaving}
-      />
 
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} shop={shop} />
     </Page>
