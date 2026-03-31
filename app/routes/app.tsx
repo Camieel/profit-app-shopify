@@ -27,8 +27,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Nu pas redirect — settings bestaat gegarandeerd
   const url = new URL(request.url);
   if (!url.pathname.includes("/onboarding") && !settings.onboardingComplete) {
-    return redirect("/app/onboarding");
-  }
+  const onboardingUrl = new URL("/app/onboarding", url.origin);
+  // Behoud shop + host params zodat Shopify auth blijft werken
+  url.searchParams.forEach((value, key) => {
+    onboardingUrl.searchParams.set(key, value);
+  });
+  return redirect(onboardingUrl.toString());
+}
 
   const productCount = await db.product.count({ where: { shop: session.shop } });
   if (productCount === 0) {
