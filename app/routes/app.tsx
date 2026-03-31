@@ -11,28 +11,25 @@ import db from "../db.server";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
 
-  const url = new URL(request.url);
-if (!url.pathname.includes("/onboarding")) {
-  const settings = await db.shopSettings.findUnique({ where: { shop: session.shop } });
-  if (settings && !settings.onboardingComplete) {
-    return redirect("/app/onboarding");
-  }
-}
-
-  // Ensure Shop + ShopSettings exist on every admin request
+  // Eerst upserten, dan pas checken
   await db.shop.upsert({
     where: { shop: session.shop },
     update: { isActive: true },
     create: { shop: session.shop },
   });
 
-  await db.shopSettings.upsert({
+  const settings = await db.shopSettings.upsert({
     where: { shop: session.shop },
     update: {},
     create: { shop: session.shop },
   });
 
-  // Sync COGS if no products in DB yet
+  // Nu pas redirect — settings bestaat gegarandeerd
+  const url = new URL(request.url);
+  if (!url.pathname.includes("/onboarding") && !settings.onboardingComplete) {
+    return redirect("/app/onboarding");
+  }
+
   const productCount = await db.product.count({ where: { shop: session.shop } });
   if (productCount === 0) {
     syncAllProductCosts(admin, session.shop).catch(console.error);
