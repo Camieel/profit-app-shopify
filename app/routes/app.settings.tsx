@@ -307,14 +307,14 @@ export default function SettingsPage() {
                 Orders below this margin % are automatically held. Set to 0 to disable.
               </Text>
               <TextField
-                label="Hold threshold (%)"
-                type="number"
-                value={holdThreshold}
-                onChange={setHoldThreshold}
-                suffix="%"
-                autoComplete="off"
-                helpText="Example: 10 means hold any order with less than 10% margin"
-              />
+  label="Alert email address(es)"
+  type="text"
+  value={alertEmail}
+  onChange={setAlertEmail}
+  placeholder="you@example.com, colleague@example.com"
+  helpText="Separate multiple addresses with a comma."
+  autoComplete="off"
+/>
             </BlockStack>
           </Card>
         </Layout.Section>
