@@ -19,12 +19,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const order = payload as any;
     const settings = await db.shopSettings.findUnique({ where: { shop } });
 
-    // 1. Revenue
-    const revenue = parseFloat(order.total_price);
-    const shippingRevenue = parseFloat(
-      order.total_shipping_price_set?.shop_money?.amount || "0"
-    );
-    const discounts = parseFloat(order.total_discounts || "0");
+    // 1. Revenue — altijd shop_money zodat multi-currency totalen kloppen
+const revenue = parseFloat(order.total_price_set?.shop_money?.amount || order.total_price || "0");
+const shippingRevenue = parseFloat(order.total_shipping_price_set?.shop_money?.amount || "0");
+const discounts = parseFloat(order.total_discounts_set?.shop_money?.amount || order.total_discounts || "0");
+const shopCurrency = order.presentment_currency !== order.currency
+  ? order.currency  // shop currency
+  : order.currency;
 
     // 2. Transaction fees
     const feePercent = settings?.transactionFeePercent ?? 2.9;
@@ -71,8 +72,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         productTitle: item.title,
         variantTitle: item.variant_title ?? null,
         quantity: item.quantity,
-        price: parseFloat(item.price),
-        discount: parseFloat(item.total_discount || "0"),
+        price: parseFloat(item.price_set?.shop_money?.amount || item.price || "0"),
+discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_discount || "0"),
         cogs: itemCogs,
         cogsFound: !!effectiveCost,
       });
@@ -121,31 +122,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const orderId = generateCuid(); // Genereer handmatig het Order ID
     
     const savedOrder = await (db.order.create as any)({
-      data: {
-        id: orderId, // Geef het ID expliciet mee
-        shop,
-        shopifyOrderId: `gid://shopify/Order/${order.id}`,
-        shopifyOrderName: order.name,
-        totalPrice: revenue,
-        subtotalPrice: parseFloat(order.subtotal_price),
-        totalTax: parseFloat(order.total_tax || "0"),
-        totalDiscounts: discounts,
-        shippingRevenue,
-        currency: order.currency,
-        cogs: totalCogs,
-        transactionFee,
-        shippingCost,
-        adSpendAllocated,
-        grossProfit,
-        netProfit,
-        marginPercent,
-        cogsComplete,
-        financialStatus: order.financial_status ?? null,
-        fulfillmentStatus: order.fulfillment_status ?? null,
-        shopifyCreatedAt: new Date(order.created_at),
-        lineItems: { create: lineItemsData },
-      },
-    });
+  data: {
+    id: orderId,
+    shop,
+    shopifyOrderId: `gid://shopify/Order/${order.id}`,
+    shopifyOrderName: order.name,
+    totalPrice: revenue,
+    subtotalPrice: parseFloat(order.subtotal_price_set?.shop_money?.amount || order.subtotal_price || "0"),
+    totalTax: parseFloat(order.total_tax_set?.shop_money?.amount || order.total_tax || "0"),
+    totalDiscounts: discounts,
+    shippingRevenue,
+    currency: order.currency,
+    cogs: totalCogs,
+    transactionFee,
+    shippingCost,
+    adSpendAllocated,
+    grossProfit,
+    netProfit,
+    marginPercent,
+    cogsComplete,
+    financialStatus: order.financial_status ?? null,
+    fulfillmentStatus: order.fulfillment_status ?? null,
+    shopifyCreatedAt: new Date(order.created_at),
+    lineItems: { create: lineItemsData },
+  },
+});
 
     console.log(
       `[Order Saved] ${order.name} | Margin: ${marginPercent.toFixed(1)}% | Net: ${netProfit.toFixed(2)} | Ad spend: $${adSpendAllocated.toFixed(2)}`
