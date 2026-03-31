@@ -25,11 +25,10 @@ import {
   useIndexResourceState,
   Filters,
   Pagination,
+  Select,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-
-const PAGE_SIZE = 20;
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
 interface VariantRow {
@@ -42,7 +41,8 @@ interface VariantRow {
   effectiveCost: number | null;
   productTitle: string;
   productId: string;
-  [key: string]: any; // <- Deze regel lost de error op
+  shopifyProductId: string;
+  [key: string]: any;
 }
 
 interface ProductGroup {
@@ -66,9 +66,11 @@ interface LoaderData {
   totalProducts: number;
   totalFilteredProducts: number;
   page: number;
+  pageSize: number;
   totalPages: number;
   search: string;
   filter: string;
+  vendor: string;
   shop: string;
 }
 
@@ -80,16 +82,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const search = url.searchParams.get("search") || "";
   const filter = url.searchParams.get("filter") || "all";
+  const vendor = url.searchParams.get("vendor") || "";
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+  
+  // Dynamic page size
+  const pageSizeParam = parseInt(url.searchParams.get("pageSize") || "20", 10);
+  const pageSize = [20, 50, 100].includes(pageSizeParam) ? pageSizeParam : 20;
 
   // Build where for products
   const productWhere: any = { shop };
+  
   if (search) {
     productWhere.OR = [
       { title: { contains: search, mode: "insensitive" } },
       { variants: { some: { sku: { contains: search, mode: "insensitive" } } } },
     ];
   }
+  
   if (filter === "missing") {
     productWhere.variants = {
       ...(productWhere.variants || {}),
@@ -97,19 +106,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
+  // NOTE: Ensure 'vendor' exists on your Prisma Product model. 
+  // If you sync productType instead, change this to productWhere.productType
+  if (vendor) {
+    productWhere.vendor = { contains: vendor, mode: "insensitive" };
+  }
+
   const totalFilteredProducts = await db.product.count({ where: productWhere });
-  const totalPages = Math.max(1, Math.ceil(totalFilteredProducts / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(totalFilteredProducts / pageSize));
   const currentPage = Math.min(page, totalPages);
 
   const products = await db.product.findMany({
     where: productWhere,
     include: { variants: true },
     orderBy: { title: "asc" },
-    skip: (currentPage - 1) * PAGE_SIZE,
-    take: PAGE_SIZE,
+    skip: (currentPage - 1) * pageSize,
+    take: pageSize,
   });
 
-  // Global stats (unfiltered)
   const [totalProducts, allVariants] = await Promise.all([
     db.product.count({ where: { shop } }),
     db.productVariant.findMany({
@@ -135,6 +149,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       effectiveCost: v.effectiveCost,
       productTitle: p.title,
       productId: p.id,
+      shopifyProductId: p.shopifyProductId,
     })),
     missingCogs: p.variants.some((v) => v.effectiveCost === null),
   }));
@@ -146,9 +161,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalProducts,
     totalFilteredProducts,
     page: currentPage,
+    pageSize,
     totalPages,
     search,
     filter,
+    vendor,
     shop: session.shop,
   });
 };
@@ -184,7 +201,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ success: true });
   }
 
-  // NIEUW: Bulk update actie voor de geselecteerde rijen in de IndexTable
   if (intent === "bulkUpdateCosts") {
     const variantIdsRaw = formData.get("variantIds") as string;
     const costRaw = formData.get("cost") as string;
@@ -245,20 +261,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // ── Frontend: Custom Inline Editing Component ────────────────────────────────
 function InlineCostInput({ variant }: { variant: VariantRow }) {
   const fetcher = useFetcher();
-  // Gebruik lokale state voor vlotte input, effect triggert opslaan
   const [value, setValue] = useState(
-    variant.customCost != null ? String(variant.customCost) : 
-    ""
+    variant.customCost != null ? String(variant.customCost) : ""
   );
 
-  // Zorg dat het veld update als data van buitenaf (bulk/import) verandert
   useEffect(() => {
     setValue(variant.customCost != null ? String(variant.customCost) : "");
   }, [variant.customCost]);
 
   const handleBlur = () => {
     const currentValue = variant.customCost != null ? String(variant.customCost) : "";
-    // Sla alleen op als de waarde écht is veranderd
     if (value !== currentValue) {
       fetcher.submit(
         { intent: "updateCost", variantId: variant.id, customCost: value },
@@ -386,24 +398,24 @@ function ImportModal({ open, onClose, shop }: { open: boolean; onClose: () => vo
 export default function ProductsPage() {
   const {
     products, totalVariants, missingCogsCount, totalProducts,
-    totalFilteredProducts, page, totalPages, search, filter, shop,
+    totalFilteredProducts, page, pageSize, totalPages, search, filter, vendor, shop,
   } = useLoaderData() as LoaderData;
 
   const submit = useSubmit();
   const navigation = useNavigation();
   const [searchParams, setSearchParams] = useSearchParams();
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vendorTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [searchValue, setSearchValue] = useState(search);
+  const [vendorValue, setVendorValue] = useState(vendor);
   const [importOpen, setImportOpen] = useState(false);
 
   const isLoading = navigation.state === "loading";
 
-  // 1. Data plat slaan voor de IndexTable (elke rij is een variant)
   const allVariants = products.flatMap((p) => p.variants);
   const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } = useIndexResourceState(allVariants);
 
-  // 2. Auto-submit / Debounce voor zoeken
   const updateParam = useCallback((key: string, value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value && value !== "all") {
@@ -423,26 +435,66 @@ export default function ProductsPage() {
     }, 500);
   }, [updateParam]);
 
-  // 3. Filters opzetten
+  const handleVendorChange = useCallback((value: string) => {
+    setVendorValue(value);
+    if (vendorTimeout.current) clearTimeout(vendorTimeout.current);
+    vendorTimeout.current = setTimeout(() => {
+      updateParam("vendor", value);
+    }, 500);
+  }, [updateParam]);
+
   const filters = [
     {
       key: "missingCogs",
       label: "COGS Status",
       filter: (
         <Button onClick={() => updateParam("filter", filter === "missing" ? "all" : "missing")}>
-          {filter === "missing" ? "Toon alles" : "Alleen missende COGS"}
+          {filter === "missing" ? "Show all" : "Missing COGS only"}
         </Button>
       ),
       shortcut: true,
     },
+    {
+      key: "vendorFilter",
+      label: "Vendor",
+      filter: (
+        <TextField
+          label="Vendor"
+          value={vendorValue}
+          onChange={handleVendorChange}
+          autoComplete="off"
+          labelHidden
+          placeholder="Search by vendor..."
+        />
+      ),
+      shortcut: false,
+    }
   ];
 
-  // 4. Bulk Actie
+  const appliedFilters = [];
+  if (filter === "missing") {
+    appliedFilters.push({
+      key: "missingCogs",
+      label: "Missing COGS only",
+      onRemove: () => updateParam("filter", "all"),
+    });
+  }
+  if (vendor) {
+    appliedFilters.push({
+      key: "vendorFilter",
+      label: `Vendor: ${vendor}`,
+      onRemove: () => {
+        setVendorValue("");
+        updateParam("vendor", "");
+      },
+    });
+  }
+
   const promotedBulkActions = [
     {
-      content: 'Stel prijs in voor selectie',
+      content: 'Set cost for selection',
       onAction: () => {
-        const bulkCost = prompt("Welke inkoopprijs wil je instellen voor deze varianten? (bijv. 12.50)");
+        const bulkCost = prompt("What custom cost do you want to set for these variants? (e.g., 12.50)");
         if (bulkCost) {
           submit(
             { intent: "bulkUpdateCosts", variantIds: JSON.stringify(selectedResources), cost: bulkCost },
@@ -454,8 +506,7 @@ export default function ProductsPage() {
     },
   ];
 
-  // Render Skeleton tijdens het laden
-  if (isLoading && !searchValue && allVariants.length === 0) {
+  if (isLoading && !searchValue && !vendorValue && allVariants.length === 0) {
     return (
       <SkeletonPage title="Products & COGS">
         <Layout>
@@ -470,7 +521,11 @@ export default function ProductsPage() {
     );
   }
 
-  // Bouw de rijen voor de IndexTable
+  const getShopifyProductUrl = (shopifyProductId: string) => {
+    const numericId = shopifyProductId.replace("gid://shopify/Product/", "");
+    return `https://${shop}/admin/products/${numericId}`;
+  };
+
   const rowMarkup = allVariants.map((variant, index) => (
     <IndexTable.Row
       id={variant.id}
@@ -479,7 +534,9 @@ export default function ProductsPage() {
       position={index}
     >
       <IndexTable.Cell>
-        <Text variant="bodyMd" fontWeight="bold" as="span">{variant.productTitle}</Text>
+        <Button variant="plain" url={getShopifyProductUrl(variant.shopifyProductId)} target="_blank">
+          <Text variant="bodyMd" fontWeight="bold" as="span">{variant.productTitle}</Text>
+        </Button>
         <br />
         <Text variant="bodySm" tone="subdued" as="span">{variant.title}</Text>
       </IndexTable.Cell>
@@ -511,15 +568,14 @@ export default function ProductsPage() {
         {missingCogsCount > 0 && (
           <Layout.Section>
             <Banner
-              title={`${missingCogsCount} variant${missingCogsCount > 1 ? "en missen" : " mist"} inkoopprijzen`}
+              title={`${missingCogsCount} variant${missingCogsCount > 1 ? "s" : ""} missing cost data`}
               tone="warning"
             >
-              <p>Vul ze direct in de tabel hieronder in, of gebruik de CSV import.</p>
+              <p>Enter them directly in the table below, or use the CSV import.</p>
             </Banner>
           </Layout.Section>
         )}
 
-        {/* Stats */}
         <Layout.Section>
           <Card>
             <InlineStack gap="800">
@@ -547,22 +603,19 @@ export default function ProductsPage() {
               <Filters
                 queryValue={searchValue}
                 filters={filters}
-appliedFilters={
-  filter === "missing" 
-    ? [{ 
-        key: "missingCogs", 
-        label: "Alleen missende COGS",
-        onRemove: () => updateParam("filter", "all") // <- Vertelt Polaris wat er gebeurt als je op het kruisje klikt
-      }] 
-    : []
-}                onQueryChange={handleSearchChange}
+                appliedFilters={appliedFilters}
+                onQueryChange={handleSearchChange}
                 onQueryClear={() => handleSearchChange("")}
-                onClearAll={() => updateParam("filter", "all")}
+                onClearAll={() => {
+                  updateParam("filter", "all");
+                  updateParam("vendor", "");
+                  setVendorValue("");
+                }}
               />
             </div>
 
             <IndexTable
-              resourceName={{ singular: 'variant', plural: 'varianten' }}
+              resourceName={{ singular: 'variant', plural: 'variants' }}
               itemCount={allVariants.length}
               selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
               onSelectionChange={handleSelectionChange}
@@ -576,7 +629,7 @@ appliedFilters={
               ]}
               emptyState={
                 <EmptyState
-                  heading={search || filter !== "all" ? "Geen producten matchen met je zoekopdracht" : "Geen producten gevonden"}
+                  heading={search || filter !== "all" || vendor ? "No products match your search" : "No products found"}
                   image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                 />
               }
@@ -584,17 +637,33 @@ appliedFilters={
               {rowMarkup}
             </IndexTable>
 
-            {totalPages > 1 && (
-              <div style={{ padding: '16px', display: 'flex', justifyContent: 'center', borderTop: '1px solid #ebebeb' }}>
+            <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #ebebeb' }}>
+              <Box>
+                <InlineStack align="start" blockAlign="center" gap="400">
+                  <Select
+                    label="Items per page"
+                    labelInline
+                    options={[
+                      { label: '20', value: '20' },
+                      { label: '50', value: '50' },
+                      { label: '100', value: '100' },
+                    ]}
+                    value={String(pageSize)}
+                    onChange={(val) => updateParam("pageSize", val)}
+                  />
+                </InlineStack>
+              </Box>
+              
+              {totalPages > 1 && (
                 <Pagination
                   hasPrevious={page > 1}
                   onPrevious={() => updateParam("page", String(page - 1))}
                   hasNext={page < totalPages}
                   onNext={() => updateParam("page", String(page + 1))}
-                  label={`Pagina ${page} van ${totalPages} (${totalFilteredProducts} resultaten)`}
+                  label={`Page ${page} of ${totalPages} (${totalFilteredProducts} results)`}
                 />
-              </div>
-            )}
+              )}
+            </div>
           </Card>
         </Layout.Section>
       </Layout>
