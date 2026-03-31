@@ -174,7 +174,9 @@ export default function Onboarding() {
   const [alertEmail, setAlertEmail] = useState(settings.alertEmail ?? "");
 
   const isSaving = fetcher.state !== "idle";
-  const progress = (step / (STEPS.length - 1)) * 100;
+  
+  // Adjusted progress calculation to start visually filled on step 0
+  const progress = ((step + 1) / STEPS.length) * 100;
 
   const handleGatewayChange = (value: string) => {
     setPaymentGateway(value);
@@ -182,6 +184,11 @@ export default function Onboarding() {
     if (preset) {
       setFeePercent(String(preset.percent));
       setFeeFixed(String(preset.fixed));
+    }
+    
+    // Automatically set extra fee to 0 if Shopify Payments is selected
+    if (value === "shopify_payments") {
+      setExtraFee("0");
     }
   };
 
@@ -348,7 +355,7 @@ export default function Onboarding() {
                 Product costs (COGS)
               </Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                COGS is what you pay for a product. Without a cost price, a variant counts as €0 — making your profit look higher than it really is.
+                COGS is what you pay for a product. Without a cost price, a variant counts as 0 in your currency — making your profit look higher than it really is.
               </Text>
             </BlockStack>
 
@@ -448,8 +455,7 @@ export default function Onboarding() {
                     value={feeFixed}
                     onChange={setFeeFixed}
                     type="number"
-                    prefix="€"
-                    helpText="e.g. 0.30"
+                    helpText="e.g. 0.30 (in your store's currency)"
                     autoComplete="off"
                   />
                 </div>
@@ -460,6 +466,7 @@ export default function Onboarding() {
                 options={EXTRA_FEE_OPTIONS}
                 value={extraFee}
                 onChange={setExtraFee}
+                disabled={paymentGateway === "shopify_payments"}
                 helpText="Shopify charges an additional fee if you don't use Shopify Payments."
               />
             </BlockStack>
@@ -610,7 +617,7 @@ export default function Onboarding() {
             </BlockStack>
 
             <Divider />
-            <NavButtons onNext={() => setStep(5)} />
+            <NavButtons onNext={() => setStep(5)} nextLabel="Got it, next" />
           </BlockStack>
         </Card>
       </Page>
