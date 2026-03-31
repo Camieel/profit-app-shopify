@@ -535,7 +535,7 @@ export default function ProductsPage() {
     >
       <IndexTable.Cell>
         <Button variant="plain" url={getShopifyProductUrl(variant.shopifyProductId)} target="_blank">
-          <Text variant="bodyMd" fontWeight="bold" as="span">{variant.productTitle}</Text>
+          {variant.productTitle}
         </Button>
         <br />
         <Text variant="bodySm" tone="subdued" as="span">{variant.title}</Text>

@@ -13,13 +13,12 @@ import {
   BlockStack,
   Tooltip,
   EmptyState,
-  SkeletonPage,
-  SkeletonBodyText,
-  SkeletonDisplayText,
   Button,
   InlineGrid,
   TextField,
+  Select,
 } from "@shopify/polaris";
+import type { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
@@ -80,7 +79,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const url = new URL(request.url);
 
-  // Default: last 30 days
   const defaultTo = toDateString(new Date());
   const defaultFrom = toDateString(new Date(Date.now() - 30 * 86400000));
 
@@ -93,7 +91,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const since = new Date(dateFrom + "T00:00:00.000Z");
   const until = new Date(dateTo + "T23:59:59.999Z");
 
-  const where: any = {
+  // Using strict Prisma types instead of 'any'
+  const where: Prisma.OrderWhereInput = {
     shop,
     shopifyCreatedAt: { gte: since, lte: until },
   };
@@ -132,33 +131,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     take: PAGE_SIZE,
   });
 
-  // Summary over full date range (no filter)
-  const allOrders = await db.order.findMany({
-    where: { shop, shopifyCreatedAt: { gte: since, lte: until } },
-    select: {
+  // Performant database-level aggregations (No memory crashes)
+  const baseSummaryWhere: Prisma.OrderWhereInput = {
+    shop,
+    shopifyCreatedAt: { gte: since, lte: until },
+  };
+
+  const aggregations = await db.order.aggregate({
+    where: baseSummaryWhere,
+    _sum: {
       totalPrice: true,
       netProfit: true,
-      marginPercent: true,
       totalDiscounts: true,
-      isHeld: true,
-      cogsComplete: true,
-      financialStatus: true,
+    },
+    _avg: {
+      marginPercent: true,
     },
   });
 
+  // Fast parallel count queries
+  const [orderCount, heldCount, missingCogsCount, refundedCount, partialRefundCount] = await Promise.all([
+    db.order.count({ where: baseSummaryWhere }),
+    db.order.count({ where: { ...baseSummaryWhere, isHeld: true } }),
+    db.order.count({ where: { ...baseSummaryWhere, cogsComplete: false } }),
+    db.order.count({ where: { ...baseSummaryWhere, financialStatus: "refunded" } }),
+    db.order.count({ where: { ...baseSummaryWhere, financialStatus: "partially_refunded" } }),
+  ]);
+
   const summary: Summary = {
-    totalRevenue: allOrders.reduce((s, o) => s + o.totalPrice, 0),
-    totalNetProfit: allOrders.reduce((s, o) => s + o.netProfit, 0),
-    totalDiscounts: allOrders.reduce((s, o) => s + o.totalDiscounts, 0),
-    avgMargin:
-      allOrders.length > 0
-        ? allOrders.reduce((s, o) => s + o.marginPercent, 0) / allOrders.length
-        : 0,
-    orderCount: allOrders.length,
-    heldCount: allOrders.filter((o) => o.isHeld).length,
-    missingCogsCount: allOrders.filter((o) => !o.cogsComplete).length,
-    refundedCount: allOrders.filter((o) => o.financialStatus === "refunded").length,
-    partialRefundCount: allOrders.filter((o) => o.financialStatus === "partially_refunded").length,
+    totalRevenue: aggregations._sum.totalPrice || 0,
+    totalNetProfit: aggregations._sum.netProfit || 0,
+    totalDiscounts: aggregations._sum.totalDiscounts || 0,
+    avgMargin: aggregations._avg.marginPercent || 0,
+    orderCount,
+    heldCount,
+    missingCogsCount,
+    refundedCount,
+    partialRefundCount,
   };
 
   return json({
@@ -222,30 +231,6 @@ function getShopifyOrderUrl(shop: string, shopifyOrderId: string) {
   return `https://${shop}/admin/orders/${numericId}`;
 }
 
-function OrdersSkeleton() {
-  return (
-    <SkeletonPage title="Orders">
-      <Layout>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <SkeletonDisplayText size="small" />
-              <SkeletonBodyText lines={1} />
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <SkeletonBodyText lines={10} />
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-      </Layout>
-    </SkeletonPage>
-  );
-}
-
 function SummaryCard({ summary }: { summary: Summary }) {
   const metrics = [
     { label: "Revenue", value: formatCurrency(summary.totalRevenue), critical: false },
@@ -283,9 +268,9 @@ export default function OrdersPage() {
 
   const [searchParams, setSearchParams] = useSearchParams();
   const navigation = useNavigation();
-  const isLoading = navigation.state === "loading";
-
-  if (isLoading) return <OrdersSkeleton />;
+  
+  // Checking if the page is transitioning (loading new data)
+  const isNavigating = navigation.state === "loading";
 
   const updateParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -307,7 +292,7 @@ export default function OrdersPage() {
       key={order.id + "-name"}
       variant="plain"
       url={getShopifyOrderUrl(shop, order.shopifyOrderId)}
-      external
+      target="_blank"
     >
       {order.shopifyOrderName}
     </Button>,
@@ -348,7 +333,7 @@ export default function OrdersPage() {
     <Text
       as="span"
       tone={order.netProfit < 0 ? "critical" : undefined}
-      fontWeight="semibold"
+      fontWeight="bold"
       key={order.id + "-profit"}
     >
       {formatCurrency(order.netProfit, order.currency)}
@@ -372,6 +357,7 @@ export default function OrdersPage() {
                   value={dateFrom}
                   onChange={(v) => updateDateRange(v, dateTo)}
                   autoComplete="off"
+                  disabled={isNavigating}
                 />
                 <TextField
                   label="To"
@@ -379,56 +365,37 @@ export default function OrdersPage() {
                   value={dateTo}
                   onChange={(v) => updateDateRange(dateFrom, v)}
                   autoComplete="off"
+                  disabled={isNavigating}
                 />
               </InlineGrid>
               <InlineGrid columns={{ xs: 1, sm: 2 }} gap="400">
-                <div>
-                  <Text as="p" variant="bodySm" tone="subdued">Status</Text>
-                  <select
-                    value={status}
-                    onChange={(e) => updateParam("status", e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid #c9cccf",
-                      fontSize: "14px",
-                      marginTop: "4px",
-                      background: "#fff",
-                      color: "#202223",
-                    }}
-                  >
-                    <option value="all">All statuses</option>
-                    <option value="clear">Clear</option>
-                    <option value="held">On Hold</option>
-                    <option value="paid">Paid</option>
-                    <option value="pending">Pending</option>
-                    <option value="refunded">Refunded</option>
-                    <option value="partially_refunded">Partially Refunded</option>
-                    <option value="cancelled">Cancelled / Voided</option>
-                  </select>
-                </div>
-                <div>
-                  <Text as="p" variant="bodySm" tone="subdued">Profitability</Text>
-                  <select
-                    value={profitability}
-                    onChange={(e) => updateParam("profitability", e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid #c9cccf",
-                      fontSize: "14px",
-                      marginTop: "4px",
-                      background: "#fff",
-                      color: "#202223",
-                    }}
-                  >
-                    <option value="all">All orders</option>
-                    <option value="profitable">Profitable only</option>
-                    <option value="loss">Losses only</option>
-                  </select>
-                </div>
+                <Select
+                  label="Status"
+                  options={[
+                    { label: "All statuses", value: "all" },
+                    { label: "Clear", value: "clear" },
+                    { label: "On Hold", value: "held" },
+                    { label: "Paid", value: "paid" },
+                    { label: "Pending", value: "pending" },
+                    { label: "Refunded", value: "refunded" },
+                    { label: "Partially Refunded", value: "partially_refunded" },
+                    { label: "Cancelled / Voided", value: "cancelled" },
+                  ]}
+                  value={status}
+                  onChange={(v) => updateParam("status", v)}
+                  disabled={isNavigating}
+                />
+                <Select
+                  label="Profitability"
+                  options={[
+                    { label: "All orders", value: "all" },
+                    { label: "Profitable only", value: "profitable" },
+                    { label: "Losses only", value: "loss" },
+                  ]}
+                  value={profitability}
+                  onChange={(v) => updateParam("profitability", v)}
+                  disabled={isNavigating}
+                />
               </InlineGrid>
             </BlockStack>
           </Card>
@@ -436,62 +403,66 @@ export default function OrdersPage() {
 
         {/* Summary */}
         <Layout.Section>
-          <SummaryCard summary={summary} />
+          <div style={{ opacity: isNavigating ? 0.6 : 1, transition: "opacity 0.2s ease-in-out" }}>
+            <SummaryCard summary={summary} />
+          </div>
         </Layout.Section>
 
         {/* Table */}
         <Layout.Section>
-          <Card padding="0">
-            {orders.length === 0 ? (
-              <EmptyState
-                heading="No orders match your filters"
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              >
-                <p>Try adjusting the date range or filters above.</p>
-              </EmptyState>
-            ) : (
-              <BlockStack gap="0">
-                <DataTable
-                  columnContentTypes={[
-                    "text", "text", "numeric", "numeric", "numeric",
-                    "numeric", "numeric", "numeric", "numeric", "text", "text",
-                  ]}
-                  headings={[
-                    "Order", "Date", "Revenue", "Discounts", "COGS",
-                    "Fees", "Shipping", "Ad Spend", "Net Profit", "Margin", "Status",
-                  ]}
-                  rows={rows}
-                />
-                <Box padding="400" borderBlockStartWidth="025" borderColor="border">
-                  <InlineStack align="space-between" blockAlign="center">
-                    <Text variant="bodySm" as="p" tone="subdued">
-                      {`Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalCount)} of ${totalCount} orders`}
-                      {summary.missingCogsCount > 0 ? " · ⚠ = incomplete COGS" : ""}
-                    </Text>
-                    <InlineStack gap="200" blockAlign="center">
-                      <Text variant="bodySm" as="span" tone="subdued">
-                        {`Page ${page} of ${totalPages}`}
+          <div style={{ opacity: isNavigating ? 0.6 : 1, transition: "opacity 0.2s ease-in-out" }}>
+            <Card padding="0">
+              {orders.length === 0 ? (
+                <EmptyState
+                  heading="No orders match your filters"
+                  image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                >
+                  <p>Try adjusting the date range or filters above.</p>
+                </EmptyState>
+              ) : (
+                <BlockStack gap="0">
+                  <DataTable
+                    columnContentTypes={[
+                      "text", "text", "numeric", "numeric", "numeric",
+                      "numeric", "numeric", "numeric", "numeric", "text", "text",
+                    ]}
+                    headings={[
+                      "Order", "Date", "Revenue", "Discounts", "COGS",
+                      "Fees", "Shipping", "Ad Spend", "Net Profit", "Margin", "Status",
+                    ]}
+                    rows={rows}
+                  />
+                  <Box padding="400" borderBlockStartWidth="025" borderColor="border">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text variant="bodySm" as="p" tone="subdued">
+                        {`Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalCount)} of ${totalCount} orders`}
+                        {summary.missingCogsCount > 0 ? " · ⚠ = incomplete COGS" : ""}
                       </Text>
-                      <Button
-                        disabled={page <= 1}
-                        onClick={() => updateParam("page", String(page - 1))}
-                        size="slim"
-                      >
-                        Previous
-                      </Button>
-                      <Button
-                        disabled={page >= totalPages}
-                        onClick={() => updateParam("page", String(page + 1))}
-                        size="slim"
-                      >
-                        Next
-                      </Button>
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text variant="bodySm" as="span" tone="subdued">
+                          {`Page ${page} of ${totalPages}`}
+                        </Text>
+                        <Button
+                          disabled={page <= 1 || isNavigating}
+                          onClick={() => updateParam("page", String(page - 1))}
+                          size="slim"
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          disabled={page >= totalPages || isNavigating}
+                          onClick={() => updateParam("page", String(page + 1))}
+                          size="slim"
+                        >
+                          Next
+                        </Button>
+                      </InlineStack>
                     </InlineStack>
-                  </InlineStack>
-                </Box>
-              </BlockStack>
-            )}
-          </Card>
+                  </Box>
+                </BlockStack>
+              )}
+            </Card>
+          </div>
         </Layout.Section>
       </Layout>
     </Page>
