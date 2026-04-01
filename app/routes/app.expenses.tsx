@@ -22,9 +22,7 @@ import {
   Divider,
   IndexTable,
   useIndexResourceState,
-  IndexFilters,
-  useSetIndexFiltersMode,
-  TabProps,
+  Tabs,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -38,7 +36,7 @@ interface Expense {
   startDate: string;
   endDate: string | null;
   isActive: boolean;
-  [key: string]: any; // <- Dit vertelt TypeScript dat Polaris extra velden mag uitlezen
+  [key: string]: any; // Fixes the TypeScript IndexTable error
 }
 
 interface ImportResult {
@@ -76,7 +74,6 @@ export function toMonthly(amount: number, interval: string): number {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  // Removed the 'as any' cast. Prisma should naturally pick this up.
   const expenses = await db.expense.findMany({
     where: { shop: session.shop },
     orderBy: { createdAt: "desc" },
@@ -449,7 +446,6 @@ export default function ExpensesPage() {
   const [csvOpen, setCsvOpen] = useState(false);
   const [selectedTab, setSelectedTab] = useState(0);
 
-  const { mode, setMode } = useSetIndexFiltersMode();
   const { selectedResources, allResourcesSelected, handleSelectionChange } = useIndexResourceState(expenses);
 
   const handleSave = (data: Record<string, string>) => {
@@ -462,7 +458,6 @@ export default function ExpensesPage() {
     setExpenseToDelete(null);
   };
 
-  // Dynamic currency formatter
   const formatCurrency = (amount: number, currencyCode: string) =>
     new Intl.NumberFormat("en-US", { 
       style: "currency", 
@@ -470,14 +465,13 @@ export default function ExpensesPage() {
       minimumFractionDigits: 2 
     }).format(amount);
 
-  // Filter expenses based on selected tab
   const filteredExpenses = expenses.filter((e) => {
     if (selectedTab === 1) return e.isActive;
     if (selectedTab === 2) return !e.isActive;
-    return true; // Tab 0 is "All"
+    return true;
   });
 
-  const tabs: TabProps[] = [
+  const tabs = [
     { id: "all", content: "All", accessibilityLabel: "All expenses" },
     { id: "active", content: "Active", accessibilityLabel: "Active expenses" },
     { id: "paused", content: "Paused", accessibilityLabel: "Paused expenses" },
@@ -489,7 +483,7 @@ export default function ExpensesPage() {
       key={expense.id}
       selected={selectedResources.includes(expense.id)}
       position={index}
-      onClick={() => setModalExpense(expense)} // Click anywhere on the row to edit
+      onClick={() => setModalExpense(expense)}
     >
       <IndexTable.Cell>
         <Text variant="bodyMd" fontWeight="semibold" as="span">{expense.name}</Text>
@@ -514,7 +508,7 @@ export default function ExpensesPage() {
         </Badge>
       </IndexTable.Cell>
       <IndexTable.Cell>
-        <div onClick={(e) => e.stopPropagation()}> {/* Prevents row click from triggering when clicking action buttons */}
+        <div onClick={(e) => e.stopPropagation()}>
           <InlineStack gap="200" wrap={false} align="end">
             <Button 
               variant="plain" 
@@ -565,47 +559,34 @@ export default function ExpensesPage() {
         {/* Expenses List */}
         <Layout.Section>
           <Card padding="0">
-            <IndexFilters
-              tabs={tabs}
-              selected={selectedTab}
-              onSelect={setSelectedTab}
-              queryValue=""
-              onQueryChange={() => {}}
-              onQueryClear={() => {}}
-              cancelAction={{ onAction: () => {}, disabled: false, loading: false }}
-              filters={[]}
-              appliedFilters={[]}
-              onClearAll={() => {}}
-              mode={mode}
-              setMode={setMode}
-              hideQueryField
-            />
-            <IndexTable
-              resourceName={{ singular: 'expense', plural: 'expenses' }}
-              itemCount={filteredExpenses.length}
-              selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
-              onSelectionChange={handleSelectionChange}
-              headings={[
-                { title: "Name" },
-                { title: "Amount" },
-                { title: "Interval" },
-                { title: "Monthly equiv." },
-                { title: "Start date" },
-                { title: "Status" },
-                { title: "Actions", alignment: "end" },
-              ]}
-              emptyState={
-                <EmptyState
-                  heading="No expenses found"
-                  action={{ content: "Add your first expense", onAction: () => setModalExpense("new") }}
-                  image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                >
-                  <p>Track recurring costs like Shopify subscriptions, warehouse rent, and agency fees.</p>
-                </EmptyState>
-              }
-            >
-              {rowMarkup}
-            </IndexTable>
+            <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab}>
+              <IndexTable
+                resourceName={{ singular: 'expense', plural: 'expenses' }}
+                itemCount={filteredExpenses.length}
+                selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
+                onSelectionChange={handleSelectionChange}
+                headings={[
+                  { title: "Name" },
+                  { title: "Amount" },
+                  { title: "Interval" },
+                  { title: "Monthly equiv." },
+                  { title: "Start date" },
+                  { title: "Status" },
+                  { title: "Actions", alignment: "end" },
+                ]}
+                emptyState={
+                  <EmptyState
+                    heading="No expenses found"
+                    action={{ content: "Add your first expense", onAction: () => setModalExpense("new") }}
+                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                  >
+                    <p>Track recurring costs like Shopify subscriptions, warehouse rent, and agency fees.</p>
+                  </EmptyState>
+                }
+              >
+                {rowMarkup}
+              </IndexTable>
+            </Tabs>
           </Card>
         </Layout.Section>
 
@@ -616,7 +597,6 @@ export default function ExpensesPage() {
         </Layout.Section>
       </Layout>
 
-      {/* Edit / Create Modal */}
       {modalExpense !== null && (
         <ExpenseModal
           key={modalExpense === "new" ? "new" : modalExpense.id}
@@ -628,7 +608,6 @@ export default function ExpensesPage() {
         />
       )}
 
-      {/* Delete Confirmation Modal */}
       <DeleteConfirmModal
         expense={expenseToDelete}
         onClose={() => setExpenseToDelete(null)}

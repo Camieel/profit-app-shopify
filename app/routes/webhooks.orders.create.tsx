@@ -170,8 +170,9 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
         settings?.holdEnabled &&
         (netProfit < 0 || (marginThreshold > 0 && marginPercent < marginThreshold));
 
+      let fo: any = null;
+
       if (shouldHold) {
-        let fo = null;
         for (let attempt = 0; attempt < 3; attempt++) {
           if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
 
@@ -216,7 +217,7 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
           await db.order.update({
             where: { id: savedOrder.id },
             data: {
-              isHeld: true,
+              isHeld: !!fo,
               heldReason: `Margin ${marginPercent.toFixed(1)}% below threshold`,
             },
           });
@@ -256,15 +257,20 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
 
         // Verzend de email als er een adres is ingesteld
         if (settings?.alertEmail) {
-          await sendAlertEmail({
-            to: settings.alertEmail,
-            orderName: order.name,
-            marginPercent,
-            netProfit,
-            revenue,
-            reason: alertType === "negative_profit" ? "Negative Profit (Loss)" : "Margin Below Threshold"
-          });
-        }
+  await sendAlertEmail({
+    to: settings.alertEmail,
+    orderName: order.name,
+    marginPercent,
+    netProfit,
+    revenue,
+    cogs: totalCogs,
+    transactionFee,
+    shippingCost,
+    adSpend: adSpendAllocated,
+    reason: alertType === "negative_profit" ? "This order is losing money" : "Margin below your alert threshold",
+    isHeld: shouldHold && !!fo,
+  });
+}
       }
     }
   } catch (err) {
