@@ -22,6 +22,7 @@ import {
   SkeletonPage,
   SkeletonBodyText,
   SkeletonDisplayText,
+  InlineGrid,
 } from "@shopify/polaris";
 import {
   LineChart,
@@ -121,68 +122,97 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const [orders30d, heldOrders, unresolvedAlerts, missingCogs, settings, expenses, totalOrderCount] =
-    await Promise.all([
-      db.order.findMany({
-        where: { shop, shopifyCreatedAt: { gte: thirtyDaysAgo } },
-        orderBy: { shopifyCreatedAt: "desc" },
-      }),
-      db.order.findMany({
-        where: { shop, isHeld: true },
-        orderBy: { shopifyCreatedAt: "desc" },
-        take: 10,
-      }),
-      db.alert.findMany({
-        where: { shop, isRead: false },
-        orderBy: { createdAt: "desc" },
-        take: 10,
-      }),
-      db.productVariant.count({
-        where: { product: { shop }, effectiveCost: null },
-      }),
-      db.shopSettings.findUnique({ where: { shop } }),
-      (db as any).expense?.findMany({
-        where: { shop, isActive: true },
-      }).catch(() => []),
-      db.order.count({ where: { shop } }),
-    ]);
+  // High-performance parallel queries
+  const [
+    thirtyDaysTotals,
+    ordersForChart,
+    heldOrders,
+    unresolvedAlerts,
+    missingCogs,
+    settings,
+    expenses,
+    totalOrderCount,
+    recentOrdersList,
+  ] = await Promise.all([
+    // 1. Let the DB do the heavy math
+    db.order.aggregate({
+      where: { shop, shopifyCreatedAt: { gte: thirtyDaysAgo } },
+      _sum: { totalPrice: true, netProfit: true },
+      _avg: { marginPercent: true },
+      _count: { id: true },
+    }),
+    // 2. Fetch minimal fields for chart grouping (Prevents Out of Memory crashes)
+    db.order.findMany({
+      where: { shop, shopifyCreatedAt: { gte: thirtyDaysAgo } },
+      select: { shopifyCreatedAt: true, totalPrice: true, netProfit: true },
+    }),
+    db.order.findMany({
+      where: { shop, isHeld: true },
+      orderBy: { shopifyCreatedAt: "desc" },
+      take: 10,
+    }),
+    db.alert.findMany({
+      where: { shop, isRead: false },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    }),
+    db.productVariant.count({
+      where: { product: { shop }, effectiveCost: null },
+    }),
+    db.shopSettings.findUnique({ where: { shop } }),
+    db.expense?.findMany({
+      where: { shop, isActive: true },
+    }).catch(() => []),
+    db.order.count({ where: { shop } }),
+    // 3. Fetch full details only for the 5 most recent orders
+    db.order.findMany({
+      where: { shop, shopifyCreatedAt: { gte: thirtyDaysAgo } },
+      orderBy: { shopifyCreatedAt: "desc" },
+      take: 5,
+    }),
+  ]);
 
-  const totalRevenue = orders30d.reduce((s, o) => s + o.totalPrice, 0);
-  const ordersNetProfit = orders30d.reduce((s, o) => s + o.netProfit, 0);
+  // Summary Math
   const monthlyExpenses = (expenses ?? []).reduce(
     (s: number, e: { amount: number; interval: string }) =>
       s + toMonthly(e.amount, e.interval),
     0
   );
+  
+  const totalRevenue = thirtyDaysTotals._sum.totalPrice || 0;
+  const ordersNetProfit = thirtyDaysTotals._sum.netProfit || 0;
   const totalNetProfit = ordersNetProfit - monthlyExpenses;
-  const avgMargin =
-    orders30d.length > 0
-      ? orders30d.reduce((s, o) => s + o.marginPercent, 0) / orders30d.length
-      : 0;
+  const avgMargin = thirtyDaysTotals._avg.marginPercent || 0;
 
-  // Chart data
-  const chartData: ChartPoint[] = [];
+  // Chart data: O(N) grouping using a Map for massive speed improvements
+  const chartMap = new Map<string, ChartPoint>();
   for (let i = 29; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    const dateStr = date.toISOString().split("T")[0];
-    const dayOrders = orders30d.filter(
-      (o) => o.shopifyCreatedAt.toISOString().split("T")[0] === dateStr
-    );
-    chartData.push({
-      date: new Date(dateStr).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-      }),
-      profit: parseFloat(
-        dayOrders.reduce((s, o) => s + o.netProfit, 0).toFixed(2)
-      ),
-      revenue: parseFloat(
-        dayOrders.reduce((s, o) => s + o.totalPrice, 0).toFixed(2)
-      ),
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split("T")[0];
+    chartMap.set(dateStr, {
+      date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+      profit: 0,
+      revenue: 0,
     });
   }
 
+  for (const o of ordersForChart) {
+    const dStr = o.shopifyCreatedAt.toISOString().split("T")[0];
+    if (chartMap.has(dStr)) {
+      const entry = chartMap.get(dStr)!;
+      entry.profit += o.netProfit;
+      entry.revenue += o.totalPrice;
+    }
+  }
+
+  const chartData = Array.from(chartMap.values()).map(point => ({
+    ...point,
+    profit: parseFloat(point.profit.toFixed(2)),
+    revenue: parseFloat(point.revenue.toFixed(2)),
+  }));
+
+  // Parse Settings
   let visibleCards: CardId[] = DEFAULT_CARDS;
   if ((settings as any)?.dashboardCards) {
     try {
@@ -197,7 +227,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       totalRevenue,
       totalNetProfit,
       avgMargin,
-      orderCount: orders30d.length,
+      orderCount: thirtyDaysTotals._count.id || 0,
       heldCount: heldOrders.length,
       monthlyExpenses,
     },
@@ -212,7 +242,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       totalPrice: o.totalPrice,
       currency: o.currency,
     })),
-    recentOrders: orders30d.slice(0, 5).map((o) => ({
+    recentOrders: recentOrdersList.map((o) => ({
       id: o.id,
       shopifyOrderName: o.shopifyOrderName,
       totalPrice: o.totalPrice,
@@ -274,15 +304,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const fo = foData.data?.order?.fulfillmentOrders?.nodes?.[0];
 
     if (fo) {
-      await admin.graphql(
+      const mutationRes = await admin.graphql(
         `#graphql
         mutation releaseHold($id: ID!) {
           fulfillmentOrderReleaseHold(id: $id) {
             fulfillmentOrder { id status }
+            userErrors { field message }
           }
         }`,
         { variables: { id: fo.id } }
       );
+      const mutationData: any = await mutationRes.json();
+      
+      // Strict Error Handling from Shopify API
+      const errors = mutationData.data?.fulfillmentOrderReleaseHold?.userErrors;
+      if (errors && errors.length > 0) {
+        console.error("Shopify Hold Release Error:", errors);
+        return json({ error: errors[0].message }, { status: 400 });
+      }
     }
 
     await db.order.update({
@@ -309,30 +348,16 @@ function fmt(amount: number, currency = "USD") {
   }).format(amount);
 }
 
-function MarginBadge({
-  margin,
-  cogsComplete,
-}: {
-  margin: number;
-  cogsComplete: boolean;
-}) {
+function MarginBadge({ margin, cogsComplete }: { margin: number; cogsComplete: boolean }) {
   if (!cogsComplete) return <Badge tone="attention">Incomplete</Badge>;
   if (margin < 0) return <Badge tone="critical">{margin.toFixed(1) + "%"}</Badge>;
   if (margin < 10) return <Badge tone="warning">{margin.toFixed(1) + "%"}</Badge>;
   return <Badge tone="success">{margin.toFixed(1) + "%"}</Badge>;
 }
 
-function StatusBadge({
-  isHeld,
-  financialStatus,
-}: {
-  isHeld: boolean;
-  financialStatus: string | null;
-}) {
-  if (financialStatus === "refunded")
-    return <Badge tone="critical">Refunded</Badge>;
-  if (financialStatus === "partially_refunded")
-    return <Badge tone="warning">Partial Refund</Badge>;
+function StatusBadge({ isHeld, financialStatus }: { isHeld: boolean; financialStatus: string | null }) {
+  if (financialStatus === "refunded") return <Badge tone="critical">Refunded</Badge>;
+  if (financialStatus === "partially_refunded") return <Badge tone="warning">Partial Refund</Badge>;
   if (isHeld) return <Badge tone="warning">On Hold</Badge>;
   return <Badge tone="success">Clear</Badge>;
 }
@@ -357,11 +382,10 @@ function DashboardSkeleton() {
           </Card>
         </Layout.Section>
         <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <SkeletonBodyText lines={5} />
-            </BlockStack>
-          </Card>
+          <InlineGrid columns={{ xs: 1, md: 2 }} gap="400">
+             <Card><SkeletonBodyText lines={5} /></Card>
+             <Card><SkeletonBodyText lines={5} /></Card>
+          </InlineGrid>
         </Layout.Section>
       </Layout>
     </SkeletonPage>
@@ -378,7 +402,6 @@ export default function Dashboard() {
     missingCogsCount,
     visibleCards: initialVisibleCards,
     hasOrders,
-    shop,
   } = useLoaderData() as LoaderData;
 
   const submit = useSubmit();
@@ -395,7 +418,6 @@ export default function Dashboard() {
 
   if (isLoading) return <DashboardSkeleton />;
 
-  // Empty state for brand new merchants with no orders yet
   if (!hasOrders) {
     return (
       <Page title="Dashboard">
@@ -405,14 +427,8 @@ export default function Dashboard() {
               <EmptyState
                 heading="ClearProfit is ready to go"
                 image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                action={{
-                  content: "Set up product costs",
-                  url: "/app/products",
-                }}
-                secondaryAction={{
-                  content: "Configure settings",
-                  url: "/app/settings",
-                }}
+                action={{ content: "Set up product costs", url: "/app/products" }}
+                secondaryAction={{ content: "Configure settings", url: "/app/settings" }}
               >
                 <p>
                   Your first order will be calculated automatically the moment
@@ -469,7 +485,7 @@ export default function Dashboard() {
       }}
     >
       <Layout>
-        {/* Missing COGS */}
+        {/* Row 1: Missing COGS Warning */}
         {isVisible("missing_cogs") && missingCogsCount > 0 && (
           <Layout.Section>
             <Banner
@@ -478,61 +494,28 @@ export default function Dashboard() {
               action={{ content: "Fix now", url: "/app/products" }}
             >
               <p>
-                Orders with these products show incomplete margins and may not
-                trigger holds correctly.
+                Orders with these products show incomplete margins and may not trigger holds correctly.
               </p>
             </Banner>
           </Layout.Section>
         )}
 
-        {/* Summary */}
+        {/* Row 2: Summary Metrics */}
         {isVisible("summary") && (
           <Layout.Section>
             <Card>
               <InlineStack gap="800" wrap={true}>
                 {[
-                  {
-                    label: "Revenue (30d)",
-                    value: fmt(summary.totalRevenue),
-                    critical: false,
-                  },
-                  {
-                    label: "Net Profit (30d)",
-                    value: fmt(summary.totalNetProfit),
-                    critical: summary.totalNetProfit < 0,
-                  },
-                  {
-                    label: "Avg Margin",
-                    value: summary.avgMargin.toFixed(1) + "%",
-                    critical: summary.avgMargin < 0,
-                  },
-                  {
-                    label: "Orders",
-                    value: String(summary.orderCount),
-                    critical: false,
-                  },
-                  {
-                    label: "On Hold",
-                    value: String(summary.heldCount),
-                    critical: summary.heldCount > 0,
-                  },
-                  {
-                    label: "Monthly expenses",
-                    value: fmt(summary.monthlyExpenses),
-                    critical: false,
-                  },
+                  { label: "Revenue (30d)", value: fmt(summary.totalRevenue), critical: false },
+                  { label: "Net Profit (30d)", value: fmt(summary.totalNetProfit), critical: summary.totalNetProfit < 0 },
+                  { label: "Avg Margin", value: summary.avgMargin.toFixed(1) + "%", critical: summary.avgMargin < 0 },
+                  { label: "Orders", value: String(summary.orderCount), critical: false },
+                  { label: "On Hold", value: String(summary.heldCount), critical: summary.heldCount > 0 },
+                  { label: "Monthly expenses", value: fmt(summary.monthlyExpenses), critical: false },
                 ].map((m) => (
                   <BlockStack key={m.label} gap="100">
-                    <Text variant="bodySm" as="p" tone="subdued">
-                      {m.label}
-                    </Text>
-                    <Text
-                      variant="headingLg"
-                      as="p"
-                      tone={m.critical ? "critical" : undefined}
-                    >
-                      {m.value}
-                    </Text>
+                    <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
+                    <Text variant="headingLg" as="p" tone={m.critical ? "critical" : undefined}>{m.value}</Text>
                   </BlockStack>
                 ))}
               </InlineStack>
@@ -540,74 +523,35 @@ export default function Dashboard() {
           </Layout.Section>
         )}
 
-        {/* Chart */}
+        {/* Row 3: Profit Chart */}
         {isVisible("chart") && (
           <Layout.Section>
             <Card>
               <BlockStack gap="400">
-                <Text variant="headingMd" as="h2">
-                  Profit trend — last 30 days
-                </Text>
+                <Text variant="headingMd" as="h2">Profit trend — last 30 days</Text>
                 {mounted ? (
                   <Box minHeight="250px">
                     <ResponsiveContainer width="100%" height={250}>
-                      <LineChart
-                        data={chartData}
-                        margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                        <XAxis
-                          dataKey="date"
-                          tick={{ fontSize: 11 }}
-                          interval={6}
-                        />
-                        <YAxis
-                          tick={{ fontSize: 11 }}
-                          tickFormatter={(v: number) => "$" + v}
-                        />
+                      <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e1e3e5" vertical={false} />
+                        <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#6d7175' }} interval={6} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 11, fill: '#6d7175' }} tickFormatter={(v: number) => "$" + v} axisLine={false} tickLine={false} />
                         <Tooltip
                           labelFormatter={(label) => String(label)}
-                          contentStyle={{ fontSize: 12 }}
+                          contentStyle={{ fontSize: 12, borderRadius: '8px', border: 'none', boxShadow: '0 0 5px rgba(0,0,0,0.1)' }}
                         />
-                        <Line
-                          type="monotone"
-                          dataKey="profit"
-                          stroke="#008060"
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="revenue"
-                          stroke="#b2d8cd"
-                          strokeWidth={1.5}
-                          dot={false}
-                          strokeDasharray="4 4"
-                        />
+                        <Line type="monotone" dataKey="profit" stroke="#008060" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
+                        <Line type="monotone" dataKey="revenue" stroke="#aee9d1" strokeWidth={2} dot={false} strokeDasharray="4 4" />
                       </LineChart>
                     </ResponsiveContainer>
                     <InlineStack gap="400" align="center">
                       <InlineStack gap="100" blockAlign="center">
-                        <Box
-                          width="12px"
-                          minHeight="3px"
-                          background="bg-fill-success"
-                          borderRadius="100"
-                        />
-                        <Text variant="bodySm" as="span" tone="subdued">
-                          Net Profit
-                        </Text>
+                        <Box width="12px" minHeight="3px" background="bg-fill-success" borderRadius="100" />
+                        <Text variant="bodySm" as="span" tone="subdued">Net Profit</Text>
                       </InlineStack>
                       <InlineStack gap="100" blockAlign="center">
-                        <Box
-                          width="12px"
-                          minHeight="3px"
-                          background="bg-fill-magic-secondary"
-                          borderRadius="100"
-                        />
-                        <Text variant="bodySm" as="span" tone="subdued">
-                          Revenue
-                        </Text>
+                        <Box width="12px" minHeight="3px" background="bg-surface-success" borderRadius="100" />
+                        <Text variant="bodySm" as="span" tone="subdued">Revenue</Text>
                       </InlineStack>
                     </InlineStack>
                   </Box>
@@ -619,234 +563,116 @@ export default function Dashboard() {
           </Layout.Section>
         )}
 
-        {/* Held orders */}
-        {isVisible("held_orders") && (
-          <Layout.Section>
-            <Card padding="0">
-              <Box
-                padding="400"
-                borderBlockEndWidth="025"
-                borderColor="border"
-              >
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="headingMd" as="h2">
-                    Held Orders
-                  </Text>
-                  {heldOrders.length > 0 && (
-                    <Badge tone="warning">{String(heldOrders.length)}</Badge>
-                  )}
-                </InlineStack>
-              </Box>
-              {heldOrders.length === 0 ? (
-                <Box padding="400">
-                  <EmptyState
-                    heading="All clear"
-                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                  >
-                    <p>No orders are currently on hold.</p>
-                  </EmptyState>
-                </Box>
-              ) : (
-                <ResourceList
-                  resourceName={{
-                    singular: "held order",
-                    plural: "held orders",
-                  }}
-                  items={heldOrders}
-                  renderItem={(order: HeldOrder) => (
-                    <ResourceItem
-                      id={order.id}
-                      onClick={() => {}}
-                      accessibilityLabel={order.shopifyOrderName}
-                    >
-                      <InlineStack align="space-between" blockAlign="center">
-                        <BlockStack gap="100">
-                          <Text variant="bodyMd" fontWeight="semibold" as="p">
-                            {order.shopifyOrderName}
-                          </Text>
-                          <Text variant="bodySm" as="p" tone="subdued">
-                            {order.heldReason ?? "Held for review"}
-                          </Text>
-                        </BlockStack>
-                        <InlineStack gap="400" blockAlign="center">
-                          <Badge
-                            tone={
-                              order.marginPercent < 0 ? "critical" : "warning"
-                            }
-                          >
-                            {order.marginPercent.toFixed(1) + "%"}
-                          </Badge>
-                          <Text variant="bodyMd" as="p">
-                            {fmt(order.totalPrice, order.currency)}
-                          </Text>
-                          <Button
-                            variant="primary"
-                            size="slim"
-                            loading={isSubmitting}
-                            onClick={() => handleReleaseHold(order.id)}
-                          >
-                            Release
-                          </Button>
-                        </InlineStack>
-                      </InlineStack>
-                    </ResourceItem>
-                  )}
-                />
-              )}
-            </Card>
-          </Layout.Section>
-        )}
-
-        {/* Recent orders */}
-        {isVisible("recent_orders") && (
-          <Layout.Section>
-            <Card padding="0">
-              <Box
-                padding="400"
-                borderBlockEndWidth="025"
-                borderColor="border"
-              >
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="headingMd" as="h2">
-                    Recent Orders
-                  </Text>
-                  <Button variant="plain" url="/app/orders">
-                    View all
-                  </Button>
-                </InlineStack>
-              </Box>
-              {recentOrders.length === 0 ? (
-                <Box padding="400">
-                  <Text as="p" tone="subdued">
-                    No orders in the last 30 days.
-                  </Text>
-                </Box>
-              ) : (
-                <DataTable
-                  columnContentTypes={[
-                    "text",
-                    "text",
-                    "numeric",
-                    "numeric",
-                    "numeric",
-                    "text",
-                    "text",
-                  ]}
-                  headings={[
-                    "Order",
-                    "Date",
-                    "Revenue",
-                    "Discounts",
-                    "Net Profit",
-                    "Margin",
-                    "Status",
-                  ]}
-                  rows={recentOrders.map((o) => [
-                    <Text
-                      variant="bodyMd"
-                      fontWeight="semibold"
-                      as="span"
-                      key={o.id}
-                    >
-                      {o.shopifyOrderName}
-                    </Text>,
-                    new Date(o.shopifyCreatedAt).toLocaleDateString("en-GB", {
-                      day: "numeric",
-                      month: "short",
-                    }),
-                    fmt(o.totalPrice, o.currency),
-                    o.totalDiscounts > 0 ? (
-                      <Text as="span" tone="caution" key={o.id + "-disc"}>
-                        {"-" + fmt(o.totalDiscounts, o.currency)}
-                      </Text>
-                    ) : (
-                      <Text as="span" tone="subdued" key={o.id + "-disc"}>—</Text>
-                    ),
-                    <Text
-                      as="span"
-                      tone={o.netProfit < 0 ? "critical" : undefined}
-                      fontWeight="semibold"
-                      key={o.id + "-profit"}
-                    >
-                      {fmt(o.netProfit, o.currency)}
-                    </Text>,
-                    <MarginBadge
-                      key={o.id + "-margin"}
-                      margin={o.marginPercent}
-                      cogsComplete={o.cogsComplete}
-                    />,
-                    <StatusBadge
-                      key={o.id + "-status"}
-                      isHeld={o.isHeld}
-                      financialStatus={o.financialStatus}
-                    />,
-                  ])}
-                />
-              )}
-            </Card>
-          </Layout.Section>
-        )}
-
-        {/* Alerts */}
-        {isVisible("alerts") && alerts.length > 0 && (
-          <Layout.Section>
-            <Card padding="0">
-              <Box
-                padding="400"
-                borderBlockEndWidth="025"
-                borderColor="border"
-              >
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="headingMd" as="h2">
-                    Alerts
-                  </Text>
-                  <Badge tone="critical">{String(alerts.length)}</Badge>
-                </InlineStack>
-              </Box>
-              <ResourceList
-                resourceName={{ singular: "alert", plural: "alerts" }}
-                items={alerts}
-                renderItem={(alert: AlertItem) => (
-                  <ResourceItem
-                    id={alert.id}
-                    onClick={() => {}}
-                    accessibilityLabel={alert.message}
-                  >
+        {/* Row 4: Grid Layout for Widgets */}
+        <Layout.Section>
+          <InlineGrid columns={{ xs: 1, lg: 2 }} gap="400">
+            
+            {/* Column A: Recent Orders */}
+            {isVisible("recent_orders") && (
+              <BlockStack gap="400">
+                <Card padding="0">
+                  <Box padding="400" borderBlockEndWidth="025" borderColor="border">
                     <InlineStack align="space-between" blockAlign="center">
-                      <BlockStack gap="100">
-                        <InlineStack gap="200" blockAlign="center">
-                          <Badge
-                            tone={
-                              alert.type === "negative_profit"
-                                ? "critical"
-                                : "warning"
-                            }
-                          >
-                            {alert.type === "negative_profit"
-                              ? "Loss"
-                              : "Low margin"}
-                          </Badge>
-                          <Text variant="bodyMd" as="p">
-                            {alert.message}
-                          </Text>
-                        </InlineStack>
-                        <Text variant="bodySm" as="p" tone="subdued">
-                          {new Date(alert.createdAt).toLocaleString("en-GB")}
-                        </Text>
-                      </BlockStack>
-                      <Button
-                        variant="plain"
-                        onClick={() => handleDismissAlert(alert.id)}
-                      >
-                        Dismiss
-                      </Button>
+                      <Text variant="headingMd" as="h2">Recent Orders</Text>
+                      <Button variant="plain" url="/app/orders">View all</Button>
                     </InlineStack>
-                  </ResourceItem>
-                )}
-              />
-            </Card>
-          </Layout.Section>
-        )}
+                  </Box>
+                  {recentOrders.length === 0 ? (
+                    <Box padding="400"><Text as="p" tone="subdued">No orders in the last 30 days.</Text></Box>
+                  ) : (
+                    <DataTable
+                      columnContentTypes={["text", "numeric", "text"]}
+                      headings={["Order", "Net Profit", "Margin"]}
+                      rows={recentOrders.map((o) => [
+                        <Text variant="bodyMd" fontWeight="semibold" as="span" key={o.id}>{o.shopifyOrderName}</Text>,
+                        <Text as="span" tone={o.netProfit < 0 ? "critical" : undefined} fontWeight="semibold" key={o.id + "-profit"}>
+                          {fmt(o.netProfit, o.currency)}
+                        </Text>,
+                        <MarginBadge key={o.id + "-margin"} margin={o.marginPercent} cogsComplete={o.cogsComplete} />,
+                      ])}
+                    />
+                  )}
+                </Card>
+              </BlockStack>
+            )}
+
+            {/* Column B: Held Orders & Alerts stacked vertically */}
+            <BlockStack gap="400">
+              {isVisible("held_orders") && (
+                <Card padding="0">
+                  <Box padding="400" borderBlockEndWidth="025" borderColor="border">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text variant="headingMd" as="h2">Held Orders</Text>
+                      {heldOrders.length > 0 && <Badge tone="warning">{String(heldOrders.length)}</Badge>}
+                    </InlineStack>
+                  </Box>
+                  {heldOrders.length === 0 ? (
+                    <Box padding="400">
+                      <EmptyState heading="All clear" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png">
+                        <p>No orders are currently on hold.</p>
+                      </EmptyState>
+                    </Box>
+                  ) : (
+                    <ResourceList
+                      resourceName={{ singular: "held order", plural: "held orders" }}
+                      items={heldOrders}
+                      renderItem={(order: HeldOrder) => (
+                        <ResourceItem id={order.id} onClick={() => {}} accessibilityLabel={order.shopifyOrderName}>
+                          <InlineStack align="space-between" blockAlign="center">
+                            <BlockStack gap="100">
+                              <Text variant="bodyMd" fontWeight="semibold" as="p">{order.shopifyOrderName}</Text>
+                              <Text variant="bodySm" as="p" tone="subdued">{order.heldReason ?? "Held for review"}</Text>
+                            </BlockStack>
+                            <InlineStack gap="400" blockAlign="center">
+                              <Badge tone={order.marginPercent < 0 ? "critical" : "warning"}>{order.marginPercent.toFixed(1) + "%"}</Badge>
+                              <Button variant="primary" size="slim" loading={isSubmitting} onClick={() => handleReleaseHold(order.id)}>
+                                Release
+                              </Button>
+                            </InlineStack>
+                          </InlineStack>
+                        </ResourceItem>
+                      )}
+                    />
+                  )}
+                </Card>
+              )}
+
+              {isVisible("alerts") && alerts.length > 0 && (
+                <Card padding="0">
+                  <Box padding="400" borderBlockEndWidth="025" borderColor="border">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text variant="headingMd" as="h2">Alerts</Text>
+                      <Badge tone="critical">{String(alerts.length)}</Badge>
+                    </InlineStack>
+                  </Box>
+                  <ResourceList
+                    resourceName={{ singular: "alert", plural: "alerts" }}
+                    items={alerts}
+                    renderItem={(alert: AlertItem) => (
+                      <ResourceItem id={alert.id} onClick={() => {}} accessibilityLabel={alert.message}>
+                        <InlineStack align="space-between" blockAlign="center">
+                          <BlockStack gap="100">
+                            <InlineStack gap="200" blockAlign="center">
+                              <Badge tone={alert.type === "negative_profit" ? "critical" : "warning"}>
+                                {alert.type === "negative_profit" ? "Loss" : "Low margin"}
+                              </Badge>
+                              <Text variant="bodyMd" as="p">{alert.message}</Text>
+                            </InlineStack>
+                            <Text variant="bodySm" as="p" tone="subdued">
+                              {new Date(alert.createdAt).toLocaleString("en-GB")}
+                            </Text>
+                          </BlockStack>
+                          <Button variant="plain" onClick={() => handleDismissAlert(alert.id)}>Dismiss</Button>
+                        </InlineStack>
+                      </ResourceItem>
+                    )}
+                  />
+                </Card>
+              )}
+            </BlockStack>
+
+          </InlineGrid>
+        </Layout.Section>
       </Layout>
 
       {/* Customize modal */}
@@ -854,19 +680,12 @@ export default function Dashboard() {
         open={customizeOpen}
         onClose={() => setCustomizeOpen(false)}
         title="Customize dashboard"
-        primaryAction={{
-          content: "Save",
-          onAction: handleSaveConfig,
-        }}
-        secondaryActions={[
-          { content: "Cancel", onAction: () => setCustomizeOpen(false) },
-        ]}
+        primaryAction={{ content: "Save", onAction: handleSaveConfig }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setCustomizeOpen(false) }]}
       >
         <Modal.Section>
           <BlockStack gap="300">
-            <Text as="p" tone="subdued">
-              Choose which cards to show on your dashboard.
-            </Text>
+            <Text as="p" tone="subdued">Choose which cards to show on your dashboard.</Text>
             {ALL_CARDS.map((card) => (
               <Checkbox
                 key={card.id}
