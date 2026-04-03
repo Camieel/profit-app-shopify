@@ -69,7 +69,7 @@ interface LossBreakdown {
   fees: number;
   discounts: number;
   total: number;
-  topSource: "ads" | "cogs" | "shipping" | "fees";
+  topSource: "ads" | "cogs" | "shipping" | "fees" | "discounts";
   topSourcePercent: number;
   topSourceAmount: number;
   isDominant: boolean;
@@ -435,23 +435,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const score = Math.pow(lossAmount7d, 1.2) * 0.6 + lossOrders7d.length * 30 * 0.3 + 100 * 0.1 + bigLossPenalty;
 
     const sourceLabels: Record<string, string> = {
-      ads: "Ad spend", cogs: "Product costs", shipping: "Shipping costs", fees: "Transaction fees",
+      ads: "Ad spend", cogs: "Product costs", shipping: "Shipping costs", fees: "Transaction fees", discounts: "Discounts",
     };
     const filterUrls: Record<string, string> = {
       ads: "/app/orders?profitability=loss&reason=ads",
       cogs: "/app/orders?profitability=loss&reason=cogs",
       shipping: "/app/orders?profitability=loss&reason=shipping",
       fees: "/app/orders?profitability=loss",
+      discounts: "/app/orders?profitability=loss",
     };
     const typeMap: Record<string, LossReason> = {
       ads: "loss_due_to_ads", cogs: "loss_due_to_cogs",
       shipping: "loss_due_to_shipping", fees: "loss_due_to_fees",
+      discounts: "loss_mixed",
     };
     const sourceAdvice: Record<string, string> = {
       ads: "Consider pausing high-spend campaigns or raising prices.",
       cogs: "Your product costs are too high relative to prices.",
       shipping: "Shipping costs exceed what your margins can absorb.",
       fees: "Payment processor fees are eroding thin margins.",
+      discounts: "You're discounting too aggressively — margins can't absorb it.",
     };
 
     const unheld = lossOrders7d.filter((o) => !o.isHeld).length;
@@ -465,21 +468,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     if (topProduct && topProduct.percentOfTotalLoss >= 40) {
       const costSourceNames: Record<string, string> = {
-        ads: "ads", cogs: "product cost", shipping: "shipping", fees: "fees",
+        ads: "ads", cogs: "product cost", shipping: "shipping", fees: "fees", discounts: "discounts",
       };
-      // Fix 2: combined insight merging product + cost source
       title = topProduct.topCostSourcePercent >= 50
         ? `"${topProduct.title}" is losing money mainly due to ${costSourceNames[topProduct.topCostSource]} (${topProduct.topCostSourcePercent}%)`
         : `"${topProduct.title}" caused ${topProduct.percentOfTotalLoss}% of your losses this week`;
 
-      // Fix 4: severity driven by product dominance
       itemSeverity = topProduct.percentOfTotalLoss > 60 ? "critical" : "warning";
       itemTimeToFix = "2 min";
       actionType = typeMap[topProduct.topCostSource] ?? "loss_due_to_ads";
-      itemActions.push(
-        { label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true },
-        { label: "View orders", url: filterUrls[topProduct.topCostSource] ?? "/app/orders?profitability=loss" },
-      );
+
+      // Context-aware action labels based on root cause
+      if (topProduct.topCostSource === "cogs") {
+        itemActions.push(
+          { label: "Update cost price", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true },
+          { label: "View loss orders", url: filterUrls["cogs"] },
+        );
+      } else if (topProduct.topCostSource === "ads") {
+        itemActions.push(
+          { label: "Review ad spend", url: filterUrls["ads"], primary: true },
+          { label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}` },
+        );
+      } else if (topProduct.topCostSource === "shipping") {
+        itemActions.push(
+          { label: "View shipping orders", url: filterUrls["shipping"], primary: true },
+          { label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}` },
+        );
+      } else {
+        itemActions.push(
+          { label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true },
+          { label: "View loss orders", url: filterUrls[topProduct.topCostSource] ?? "/app/orders?profitability=loss" },
+        );
+      }
     } else if (isDominant) {
       title = `${sourceLabels[topSource]} caused ${topSourcePercent}% of your losses this week`;
       actionType = typeMap[topSource] ?? "loss_due_to_ads";
@@ -496,7 +516,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       );
     }
 
-    const description = `${lossOrders7d.length} order${lossOrders7d.length > 1 ? "s" : ""} unprofitable${unheld > 0 ? ` · ${unheld} shipped without being held` : ""}. ${isDominant ? sourceAdvice[topSource] : "Review your pricing, COGS, and ad spend together."}`;
+    const cogsAdvice = topProduct?.topCostSource === "cogs"
+      ? ` Update the cost price in ClearProfit or raise the selling price in Shopify to break even.`
+      : "";
+    const description = `${lossOrders7d.length} order${lossOrders7d.length > 1 ? "s" : ""} unprofitable${unheld > 0 ? ` · ${unheld} shipped without being held` : ""}. ${isDominant ? sourceAdvice[topSource] : "Review your pricing, COGS, and ad spend together."}${cogsAdvice}`;
 
     // Fix 6: potential recovery
     const potentialRecovery = topProduct ? topProduct.totalLoss : lossAmount7d;
@@ -605,7 +628,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const { topSource, topSourcePercent, isDominant, topProduct } = lossBreakdown;
     const sourceNames: Record<string, string> = {
       ads: "Facebook/Google ads", cogs: "product costs",
-      shipping: "shipping costs", fees: "transaction fees",
+      shipping: "shipping costs", fees: "transaction fees", discounts: "discounts",
     };
     // Fix 2: combined hero insight with both product and cost source
     if (topProduct && topProduct.percentOfTotalLoss >= 40 && topProduct.topCostSourcePercent >= 50) {
@@ -964,8 +987,8 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
                         {a.label}
                       </Button>
                     ))}
-                    <Button variant="plain" size="slim" tone="critical" onClick={() => snooze24h(item.type)}>
-                      <span style={{ fontSize: "11px", color: "#9ca3af" }}>Snooze 24h</span>
+                    <Button variant="plain" size="slim" onClick={() => snooze24h(item.type)}>
+                      Snooze 24h
                     </Button>
                   </BlockStack>
                 </InlineStack>
