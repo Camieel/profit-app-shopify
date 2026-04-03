@@ -9,7 +9,7 @@ import {
 } from "@shopify/polaris";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceDot,
+  ResponsiveContainer, ReferenceDot, ReferenceLine,
 } from "recharts";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -67,6 +67,7 @@ interface LossBreakdown {
   cogs: number;
   shipping: number;
   fees: number;
+  discounts: number;
   total: number;
   topSource: "ads" | "cogs" | "shipping" | "fees";
   topSourcePercent: number;
@@ -119,6 +120,7 @@ interface PriorityOrder {
   financialStatus: string | null;
   currency: string;
   topCostReason: string;
+  repeatLossCount: number; // how many times this top cost reason appeared in losses this period
 }
 
 interface HeldOrder {
@@ -174,12 +176,13 @@ function getTopCostReason(o: {
 // ── Root cause analysis ───────────────────────────────────────────────────────
 function analyzeLossReasons(
   orders: Array<{
-    id: string; // Fix 5: id is now typed
+    id: string;
     netProfit: number;
     adSpendAllocated: number;
     cogs: number;
     shippingCost: number;
     transactionFee: number;
+    totalDiscounts: number; // edge case: discounts can be root cause
   }>,
   lineItemsByOrder: Map<string, Array<{
     productId: string;
@@ -193,21 +196,24 @@ function analyzeLossReasons(
   if (lossOrders.length === 0) return null;
 
   // Fix 1: proportional attribution — each cost's share of the actual loss
-  const breakdown = { ads: 0, cogs: 0, shipping: 0, fees: 0 };
+  // Discounts included: they reduce revenue, making them a root cause of losses
+  const breakdown = { ads: 0, cogs: 0, shipping: 0, fees: 0, discounts: 0 };
 
   for (const o of lossOrders) {
     const totalCosts =
       (o.adSpendAllocated ?? 0) + (o.cogs ?? 0) +
-      (o.shippingCost ?? 0) + (o.transactionFee ?? 0);
+      (o.shippingCost ?? 0) + (o.transactionFee ?? 0) +
+      (o.totalDiscounts ?? 0);
     if (totalCosts === 0) continue;
     const lossShare = Math.abs(o.netProfit) / totalCosts;
     breakdown.ads += (o.adSpendAllocated ?? 0) * lossShare;
     breakdown.cogs += (o.cogs ?? 0) * lossShare;
     breakdown.shipping += (o.shippingCost ?? 0) * lossShare;
     breakdown.fees += (o.transactionFee ?? 0) * lossShare;
+    breakdown.discounts += (o.totalDiscounts ?? 0) * lossShare;
   }
 
-  const total = breakdown.ads + breakdown.cogs + breakdown.shipping + breakdown.fees;
+  const total = breakdown.ads + breakdown.cogs + breakdown.shipping + breakdown.fees + breakdown.discounts;
   if (total === 0) return null;
 
   const entries = Object.entries(breakdown) as [keyof typeof breakdown, number][];
@@ -334,7 +340,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         id: true,
         netProfit: true, marginPercent: true, isHeld: true,
         adSpendAllocated: true, cogs: true, shippingCost: true,
-        transactionFee: true, totalPrice: true,
+        transactionFee: true, totalPrice: true, totalDiscounts: true,
       },
     }),
     db.order.findMany({
@@ -567,6 +573,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
+  // Fix 2: Missing COGS as data health action item instead of standalone banner
+  if (missingCogsVariants.length > 0) {
+    const cogsImpactCalc = orders30d.filter((o) => !o.cogsComplete).length *
+      (totalRevenue30d / Math.max(orders30d.length, 1)) * 0.15;
+    actionItems.push({
+      type: "loss_mixed" as LossReason,
+      severity: "info",
+      confidence: "low",
+      score: missingCogsVariants.length * 10,
+      title: `Data health: ${missingCogsVariants.length} products missing cost data`,
+      description: `Orders with missing COGS show inflated margins and may not trigger holds correctly.`,
+      impact: `Profit may be overstated by ~${fmtK(cogsImpactCalc)}`,
+      potentialRecovery: null,
+      timeToFix: "2 min",
+      filterUrl: "/app/products?filter=missing",
+      actions: [{ label: "Fix now", url: "/app/products?filter=missing", primary: true }],
+    });
+  }
+
   const prioritizedItems = actionItems.sort((a, b) => b.score - a.score).slice(0, 3);
 
   // ── State + hero insight ──────────────────────────────────────────────────────
@@ -654,15 +679,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }));
 
   // ── Priority orders ───────────────────────────────────────────────────────────
+  // Fix 4: count how many loss orders share the same top cost reason (repeat detection)
+  const lossOrders30d = orders30d.filter((o) => o.netProfit < 0);
+  const reasonCounts = new Map<string, number>();
+  for (const o of lossOrders30d) {
+    const reason = getTopCostReason(o);
+    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+  }
+
   const priorityOrders: PriorityOrder[] = [...orders30d]
     .sort((a, b) => a.netProfit - b.netProfit)
     .slice(0, 8)
-    .map((o) => ({
-      id: o.id, shopifyOrderId: o.shopifyOrderId, shopifyOrderName: o.shopifyOrderName,
-      netProfit: o.netProfit, marginPercent: o.marginPercent, isHeld: o.isHeld,
-      cogsComplete: o.cogsComplete, financialStatus: o.financialStatus, currency: o.currency,
-      topCostReason: getTopCostReason(o),
-    }));
+    .map((o) => {
+      const topCostReason = getTopCostReason(o);
+      return {
+        id: o.id, shopifyOrderId: o.shopifyOrderId, shopifyOrderName: o.shopifyOrderName,
+        netProfit: o.netProfit, marginPercent: o.marginPercent, isHeld: o.isHeld,
+        cogsComplete: o.cogsComplete, financialStatus: o.financialStatus, currency: o.currency,
+        topCostReason,
+        repeatLossCount: reasonCounts.get(topCostReason) ?? 0,
+      };
+    });
 
   const heldSavedAmount = heldOrders
     .filter((o) => o.netProfit < 0)
@@ -785,7 +822,21 @@ const confidenceConfig: Record<Confidence, { text: string; color: string }> = {
   low: { text: "Low confidence — some data missing", color: "#6b7280" },
 };
 
-function ActionCenter({ actionCenter }: { actionCenter: ActionCenterState }) {
+// ── Type icons for Action Center ─────────────────────────────────────────────
+const actionTypeIcons: Record<string, string> = {
+  loss_due_to_ads: "📢",
+  loss_due_to_cogs: "📦",
+  loss_due_to_shipping: "🚚",
+  loss_due_to_fees: "💳",
+  loss_mixed: "⚖️",
+  low_margin: "📉",
+  high_expenses: "🏢",
+};
+
+function ActionCenter({ actionCenter, missingCogsCount }: {
+  actionCenter: ActionCenterState;
+  missingCogsCount: number;
+}) {
   const navigate = useNavigate();
   const { state, heroInsight, items, lossBreakdown } = actionCenter;
   const { dismissed, snooze24h } = useDismissed();
@@ -862,50 +913,61 @@ function ActionCenter({ actionCenter }: { actionCenter: ActionCenterState }) {
         <div style={{ background: "#ffffff" }}>
           {visibleItems.map((item, i) => {
             const conf = confidenceConfig[item.confidence];
+            const typeIcon = actionTypeIcons[item.type] ?? "•";
+            const accentColor = item.severity === "critical" ? "#d92d20" : item.severity === "warning" ? "#b54708" : "#6b7280";
             return (
               <div
                 key={item.type}
                 style={{ padding: "20px 24px", borderBottom: i < visibleItems.length - 1 ? "1px solid #f5f5f5" : undefined }}
               >
                 <InlineStack align="space-between" blockAlign="start" gap="400">
-                  <BlockStack gap="100">
-                    <InlineStack gap="200" blockAlign="center">
-                      <Badge tone={item.severity === "critical" ? "critical" : item.severity === "warning" ? "warning" : "info"}>
-                        {item.severity === "critical" ? "Critical" : item.severity === "warning" ? "Warning" : "Info"}
-                      </Badge>
-                      <Text variant="bodyMd" fontWeight="semibold" as="p">{item.title}</Text>
-                    </InlineStack>
-                    <Text variant="bodySm" as="p" tone="subdued">{item.description}</Text>
-                    <InlineStack gap="300" blockAlign="center" wrap>
-                      <Text variant="bodySm" as="p" tone={item.severity === "critical" ? "critical" : "caution"}>
-                        {item.impact}
-                      </Text>
-                      {/* Fix 6: potential recovery */}
-                      {item.potentialRecovery != null && item.potentialRecovery > 0 && (
-                        <Text variant="bodySm" as="p" tone="success">
-                          · Fixing this could recover ~{fmtK(item.potentialRecovery)}/week
+                  <InlineStack gap="300" blockAlign="start">
+                    {/* Fix 1: type icon with accent color */}
+                    <div style={{
+                      width: 36, height: 36, borderRadius: "8px", flexShrink: 0,
+                      background: item.severity === "critical" ? "#fff1f0" : item.severity === "warning" ? "#fffbe6" : "#f5f5f5",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: "18px",
+                    }}>
+                      {typeIcon}
+                    </div>
+                    <BlockStack gap="100">
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text variant="bodyMd" fontWeight="semibold" as="p">{item.title}</Text>
+                        <Badge tone={item.severity === "critical" ? "critical" : item.severity === "warning" ? "warning" : "info"}>
+                          {item.timeToFix}
+                        </Badge>
+                      </InlineStack>
+                      <Text variant="bodySm" as="p" tone="subdued">{item.description}</Text>
+                      <InlineStack gap="300" blockAlign="center" wrap>
+                        <Text variant="bodySm" as="p" tone={item.severity === "critical" ? "critical" : "caution"}>
+                          {item.impact}
                         </Text>
-                      )}
-                      <Text variant="bodySm" as="p" tone="subdued">· {item.timeToFix} to fix</Text>
-                      <span style={{ fontSize: "11px", color: conf.color }}>· {conf.text}</span>
-                    </InlineStack>
-                  </BlockStack>
-                  <InlineStack gap="200" blockAlign="center">
-                    {item.actions.map((a) => (
-                      // Fix 5: navigate instead of url prop
-                      <Button
-                        key={a.label}
-                        variant={a.primary ? "primary" : "plain"}
-                        size="slim"
-                        onClick={() => navigate(a.url)}
-                      >
+                        {item.potentialRecovery != null && item.potentialRecovery > 0 && (
+                          <Text variant="bodySm" as="p" tone="success">
+                            · Recover ~{fmtK(item.potentialRecovery)}/week if fixed
+                          </Text>
+                        )}
+                        <span style={{ fontSize: "11px", color: conf.color }}>· {conf.text}</span>
+                      </InlineStack>
+                    </BlockStack>
+                  </InlineStack>
+                  {/* Fix 1: primary action visually dominant, snooze visually muted */}
+                  <BlockStack gap="100">
+                    {item.actions.filter((a) => a.primary).map((a) => (
+                      <Button key={a.label} variant="primary" size="slim" onClick={() => navigate(a.url)}>
                         {a.label}
                       </Button>
                     ))}
-                    <Button variant="plain" size="slim" onClick={() => snooze24h(item.type)}>
-                      Snooze 24h
+                    {item.actions.filter((a) => !a.primary).map((a) => (
+                      <Button key={a.label} variant="plain" size="slim" onClick={() => navigate(a.url)}>
+                        {a.label}
+                      </Button>
+                    ))}
+                    <Button variant="plain" size="slim" tone="critical" onClick={() => snooze24h(item.type)}>
+                      <span style={{ fontSize: "11px", color: "#9ca3af" }}>Snooze 24h</span>
                     </Button>
-                  </InlineStack>
+                  </BlockStack>
                 </InlineStack>
               </div>
             );
@@ -998,6 +1060,8 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
               <Tooltip content={<ChartTooltip />} />
               <Line type="monotone" dataKey="revenue" stroke="#e5e7eb" strokeWidth={2} dot={false} strokeDasharray="4 4" name="revenue" />
               <Line type="monotone" dataKey="profit" stroke="#008060" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} name="profit" />
+              {/* Fix 3: zero line — visual split between profit and loss */}
+              <ReferenceLine y={0} stroke="#d92d20" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: "Break even", position: "right", fontSize: 10, fill: "#d92d20" }} />
               {lossDays.map((d) => (
                 <ReferenceDot
                   key={d.dateKey}
@@ -1064,7 +1128,16 @@ function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: strin
             o.cogsComplete
               ? <Badge key={o.id + "-m"} tone={o.marginPercent < 0 ? "critical" : o.marginPercent < 10 ? "warning" : "success"}>{o.marginPercent.toFixed(1) + "%"}</Badge>
               : <Badge key={o.id + "-m"} tone="attention">Incomplete</Badge>,
-            <Text key={o.id + "-r"} variant="bodySm" as="span" tone="subdued">{o.topCostReason}</Text>,
+            // Fix 4: show top cost reason + repeat indicator
+            <InlineStack key={o.id + "-r"} gap="100" blockAlign="center">
+              <Text variant="bodySm" as="span" tone="subdued">{o.topCostReason}</Text>
+              {o.repeatLossCount >= 3 && o.netProfit < 0 && (
+                <Badge tone="critical">{`×${o.repeatLossCount}`}</Badge>
+              )}
+              {o.repeatLossCount >= 2 && o.repeatLossCount < 3 && o.netProfit < 0 && (
+                <Badge tone="warning">{`×${o.repeatLossCount}`}</Badge>
+              )}
+            </InlineStack>,
             o.isHeld
               ? <Badge key={o.id + "-s"} tone="warning">On Hold</Badge>
               : o.financialStatus === "refunded"
@@ -1184,20 +1257,8 @@ export default function Dashboard() {
       }}
     >
       <Layout>
-        {missingCogsCount > 0 && (
-          <Layout.Section>
-            <Banner
-              tone="warning"
-              action={{ content: "Fix now — 2 min", url: "/app/products" }}
-              title={`⚠️ Your profit is overstated by ~${fmtCurrency(missingCogsImpact)} — ${missingCogsCount} products missing cost data`}
-            >
-              <p>Orders with missing costs show inflated margins and may not trigger holds correctly.</p>
-            </Banner>
-          </Layout.Section>
-        )}
-
         {isVisible("action_center") && (
-          <Layout.Section><ActionCenter actionCenter={actionCenter} /></Layout.Section>
+          <Layout.Section><ActionCenter actionCenter={actionCenter} missingCogsCount={missingCogsCount} /></Layout.Section>
         )}
 
         {isVisible("kpi_strip") && (
