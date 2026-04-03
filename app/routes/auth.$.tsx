@@ -1,4 +1,5 @@
 // app/routes/auth.$.tsx
+
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -19,7 +20,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     create: { shop: session.shop },
   });
 
-  syncAllProductCosts(admin, session.shop).catch(console.error);
+  syncAllProductCosts(admin, session.shop).catch((err) => 
+    console.error("[Background Sync] Failed during auth:", err)
+  );
 
   return null;
 };
@@ -63,47 +66,52 @@ async function syncAllProductCosts(admin: any, shop: string) {
     const products = data.data?.products?.edges || [];
 
     for (const { node: product } of products) {
+      // 1. Upsert Product
       const savedProduct = await db.product.upsert({
         where: { shop_shopifyProductId: { shop, shopifyProductId: product.id } },
         update: { title: product.title },
         create: { shop, shopifyProductId: product.id, title: product.title },
       });
 
-      for (const { node: variant } of product.variants.edges) {
-        const costPerItem = variant.inventoryItem?.unitCost?.amount
-          ? parseFloat(variant.inventoryItem.unitCost.amount)
-          : null;
+      // 2. Upsert all variants in parallel (Much faster!)
+      await Promise.all(
+        product.variants.edges.map(({ node: variant }: any) => {
+          const costPerItem = variant.inventoryItem?.unitCost?.amount
+            ? parseFloat(variant.inventoryItem.unitCost.amount)
+            : null;
 
-        await db.productVariant.upsert({
-          where: {
-            productId_shopifyVariantId: {
+          return db.productVariant.upsert({
+            where: {
+              productId_shopifyVariantId: {
+                productId: savedProduct.id,
+                shopifyVariantId: variant.id,
+              },
+            },
+            update: {
+              title: variant.title,
+              sku: variant.sku ?? null,
+              shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              costPerItem,
+              effectiveCost: costPerItem, // Sets baseline effective cost
+            },
+            create: {
               productId: savedProduct.id,
               shopifyVariantId: variant.id,
+              title: variant.title,
+              sku: variant.sku ?? null,
+              shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              costPerItem,
+              effectiveCost: costPerItem,
             },
-          },
-          update: {
-            title: variant.title,
-            sku: variant.sku ?? null,
-            shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
-            costPerItem,
-            effectiveCost: costPerItem,
-          },
-          create: {
-            productId: savedProduct.id,
-            shopifyVariantId: variant.id,
-            title: variant.title,
-            sku: variant.sku ?? null,
-            shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
-            costPerItem,
-            effectiveCost: costPerItem,
-          },
-        });
-      }
+          });
+        })
+      );
     }
 
     cursor = data.data?.products?.pageInfo?.hasNextPage
       ? data.data?.products?.pageInfo?.endCursor
       : null;
+      
   } while (cursor);
 
   console.log(`[COGS Sync] Complete for ${shop}`);

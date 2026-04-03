@@ -10,20 +10,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
 
-  if (error || !code || !state) {
-    console.error("[TikTok OAuth] Error:", error);
-    const shopDomain = "smart-order-notes-dev";
-    return redirect(
-      `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=tiktok_auth_failed`
-    );
-  }
-
-  const shop = Buffer.from(state, "base64").toString("utf-8");
+  // Decode shop early so we can use it in error redirects (No hardcoded dev store!)
+  const shop = state ? Buffer.from(state, "base64").toString("utf-8") : "";
   const shopDomain = shop.replace(".myshopify.com", "");
 
-  const appId = process.env.TIKTOK_APP_ID!;
-  const appSecret = process.env.TIKTOK_APP_SECRET!;
-  const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/tiktok/callback`;
+  if (error || !code || !state) {
+    console.error("[TikTok OAuth] Error:", error);
+    return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=tiktok_auth_failed"));
+  }
+
+  const appId = process.env.TIKTOK_APP_ID;
+  const appSecret = process.env.TIKTOK_APP_SECRET;
+  const appUrl = process.env.SHOPIFY_APP_URL;
+
+  // Veiligheidscheck voor environment variables
+  if (!appId || !appSecret || !appUrl) {
+    console.error("[TikTok OAuth] Missing required environment variables.");
+    return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=tiktok_config_missing"));
+  }
+
+  const redirectUri = `${appUrl}/connect/tiktok/callback`;
 
   try {
     // Exchange code for access token
@@ -44,18 +50,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     if (tokenData.code !== 0 || !tokenData.data?.access_token) {
       console.error("[TikTok OAuth] Token error:", tokenData);
-      return redirect(
-        `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=tiktok_token_failed`
-      );
+      return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=tiktok_token_failed"));
     }
 
     const accessToken = tokenData.data.access_token;
     const advertiserIds: string[] = tokenData.data.advertiser_ids ?? [];
 
     if (advertiserIds.length === 0) {
-      return redirect(
-        `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=tiktok_no_accounts`
-      );
+      return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=tiktok_no_accounts"));
     }
 
     // Get advertiser info for the first account
@@ -73,7 +75,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const accountId = advertiserIds[0];
     const accountName = advertiser?.advertiser_name ?? accountId;
 
-    await (db as any).adIntegration.upsert({
+    await db.adIntegration.upsert({
       where: { shop_platform: { shop, platform: "tiktok" } },
       update: { accessToken, accountId, accountName, isActive: true },
       create: {
@@ -86,19 +88,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     });
 
+    // Start background sync
     syncTikTokSpend(shop, accessToken, accountId).catch(console.error);
 
     console.log(`[TikTok OAuth] Connected for ${shop}: ${accountName}`);
-    return redirect(
-      `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?success=tiktok_connected`
-    );
+    return redirect(buildShopifyAdminUrl(shopDomain, "settings?success=tiktok_connected"));
   } catch (err) {
     console.error("[TikTok OAuth] Error:", err);
-    return redirect(
-      `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/settings?error=tiktok_auth_failed`
-    );
+    return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=tiktok_auth_failed"));
   }
 };
+
+// Helper function to build dynamic Shopify Admin URLs
+function buildShopifyAdminUrl(shopDomain: string, path: string) {
+  const appHandle = process.env.SHOPIFY_APP_HANDLE || "profit-tracker-app-5";
+  return `https://admin.shopify.com/store/${shopDomain}/apps/${appHandle}/app/${path}`;
+}
 
 async function syncTikTokSpend(
   shop: string,
@@ -136,7 +141,7 @@ async function syncTikTokSpend(
     const date = row.dimensions?.stat_time_day?.split(" ")[0];
     if (!date) continue;
 
-    await (db as any).adSpend.upsert({
+    await db.adSpend.upsert({
       where: { shop_platform_date: { shop, platform: "tiktok", date } },
       update: {
         spend: parseFloat(row.metrics?.spend ?? "0"),

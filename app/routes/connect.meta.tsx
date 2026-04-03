@@ -2,21 +2,30 @@
 
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const shop = url.searchParams.get("shop");
 
-  const metaAppId = process.env.META_APP_ID!;
-  const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/meta/callback`;
+  if (!shop) return new Response("Missing shop", { status: 400 });
+
+  const metaAppId = process.env.META_APP_ID;
+  const appUrl = process.env.SHOPIFY_APP_URL;
+
+  // Veiligheidscheck: voorkomt 500 server crashes als variabelen missen
+  if (!metaAppId || !appUrl) {
+    console.error("[Meta OAuth] Missing META_APP_ID or SHOPIFY_APP_URL in environment variables.");
+    return new Response("Server configuration error", { status: 500 });
+  }
+
+  const redirectUri = `${appUrl}/connect/meta/callback`;
+  const state = Buffer.from(shop).toString("base64");
 
   const scopes = [
     "ads_read",
     "ads_management",
     "business_management",
   ].join(",");
-
-  const state = Buffer.from(session.shop).toString("base64");
 
   const authUrl =
     `https://www.facebook.com/v19.0/dialog/oauth?` +

@@ -5,13 +5,24 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shop, payload } = await authenticate.webhook(request);
+  const { payload } = await authenticate.webhook(request);
 
   const item = payload as any;
 
   try {
-    const cost = item.cost ? parseFloat(item.cost) : null;
-    const shopifyInventoryItemId = `gid://shopify/InventoryItem/${item.id}`;
+    // Veilig parsen: check expliciet of het niet null/undefined is.
+    // Dit zorgt ervoor dat een kostprijs van 0 netjes behouden blijft.
+    let cost: number | null = null;
+    if (item.cost != null) {
+      const parsedCost = parseFloat(item.cost);
+      if (!isNaN(parsedCost)) {
+        cost = parsedCost;
+      }
+    }
+
+    // Shopify payloads hebben vaak de admin_graphql_api_id al ingebouwd, 
+    // maar handmatig opbouwen als fallback is de veiligste manier.
+    const shopifyInventoryItemId = item.admin_graphql_api_id || `gid://shopify/InventoryItem/${item.id}`;
 
     // Find variant by inventory item ID and update cost
     const variant = await db.productVariant.findFirst({

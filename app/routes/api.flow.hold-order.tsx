@@ -9,19 +9,19 @@ import db from "../db.server";
  * the "Hold Order for Review" action in their Flow workflow.
  */
 export const action = async ({ request }: ActionFunctionArgs) => {
-  // Authenticate the Flow action request
-  const { admin, payload } = await authenticate.flow(request);
+  // Destructure session instead of shop directly
+  const { admin, payload, session } = await authenticate.flow(request);
 
   try {
     const orderId = payload?.order_id as string;
     const reason = (payload?.reason as string) || "Held by Shopify Flow";
 
-    if (!orderId) {
-      return json({ error: "order_id is required" }, { status: 400 });
-    }
+    // Safely extract the shop domain from the session, fallback to payload
+    const shop = session?.shop || (payload?.shop_domain as string);
 
-    // Get the shop from the authenticated session
-    const shop = payload?.shop_domain as string;
+    if (!orderId || !shop) {
+      return json({ error: "order_id and shop are required" }, { status: 400 });
+    }
 
     // Get fulfillment orders from Shopify
     let fo = null;
@@ -52,7 +52,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (fo) {
-      await admin.graphql(
+      const mutationRes = await admin.graphql(
         `#graphql
         mutation holdFulfillment($id: ID!, $reasonNotes: String!) {
           fulfillmentOrderHold(id: $id, fulfillmentHold: { reason: OTHER, reasonNotes: $reasonNotes }) {
@@ -67,11 +67,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         }
       );
+      
+      const mutationData: any = await mutationRes.json();
+      const errors = mutationData.data?.fulfillmentOrderHold?.userErrors;
 
-      // Update our DB if we have this order
-      const numericId = orderId.replace("gid://shopify/Order/", "");
+      // Check if Shopify actually accepted the hold action
+      if (errors && errors.length > 0) {
+        console.error("[Flow Action] Shopify rejected hold:", errors);
+        return json({ error: errors[0].message }, { status: 400 });
+      }
+
+      // Update our DB safely using an exact match and scoping to the shop
       const dbOrder = await db.order.findFirst({
-        where: { shopifyOrderId: { contains: numericId } },
+        where: { shop, shopifyOrderId: orderId },
       });
 
       if (dbOrder) {

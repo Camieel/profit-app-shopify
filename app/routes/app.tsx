@@ -1,4 +1,5 @@
 // app/routes/app.tsx
+
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -8,10 +9,20 @@ import enTranslations from "@shopify/polaris/locales/en.json";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
+// Vertelt TypeScript dat de Shopify Web Component <ui-nav-menu> een geldige HTML tag is
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      "ui-nav-menu": React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement>;
+    }
+  }
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
+  const url = new URL(request.url);
 
-  // Eerst upserten, dan pas checken
+  // Initialize shop and settings
   await db.shop.upsert({
     where: { shop: session.shop },
     update: { isActive: true },
@@ -24,20 +35,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     create: { shop: session.shop },
   });
 
-  // Nu pas redirect — settings bestaat gegarandeerd
-  const url = new URL(request.url);
+  // Redirect to onboarding if not complete, preserving Shopify auth params
   if (!url.pathname.includes("/onboarding") && !settings.onboardingComplete) {
-  const onboardingUrl = new URL("/app/onboarding", url.origin);
-  // Behoud shop + host params zodat Shopify auth blijft werken
-  url.searchParams.forEach((value, key) => {
-    onboardingUrl.searchParams.set(key, value);
-  });
-  return redirect(onboardingUrl.toString());
-}
+    return redirect(`/app/onboarding?${url.searchParams.toString()}`);
+  }
 
+  // Background product sync for fresh installs
   const productCount = await db.product.count({ where: { shop: session.shop } });
   if (productCount === 0) {
-    syncAllProductCosts(admin, session.shop).catch(console.error);
+    syncAllProductCosts(admin, session.shop).catch((err) => 
+      console.error("[Background Sync] Failed:", err)
+    );
   }
 
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
@@ -49,13 +57,15 @@ export default function App() {
   return (
     <ShopifyAppProvider embedded apiKey={apiKey}>
       <PolarisAppProvider i18n={enTranslations}>
-        <s-app-nav>
-          <s-link href="/app">Dashboard</s-link>
-          <s-link href="/app/orders">Orders</s-link>
-          <s-link href="/app/products">Products</s-link>
-          <s-link href="/app/expenses">Expenses</s-link>
-          <s-link href="/app/settings">Settings</s-link>
-        </s-app-nav>
+        {/* Modern App Bridge v4 Navigation */}
+        <ui-nav-menu>
+          <a href="/app" rel="home">Dashboard</a>
+          <a href="/app/orders">Orders</a>
+          <a href="/app/products">Products</a>
+          <a href="/app/expenses">Expenses</a>
+          <a href="/app/settings">Settings</a>
+        </ui-nav-menu>
+        
         <Outlet />
       </PolarisAppProvider>
     </ShopifyAppProvider>
@@ -70,6 +80,7 @@ export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
 
+// --- Background Sync Task ---
 async function syncAllProductCosts(admin: any, shop: string) {
   console.log(`[COGS Sync] Starting for ${shop}`);
   let cursor: string | null = null;
@@ -105,47 +116,52 @@ async function syncAllProductCosts(admin: any, shop: string) {
     const products = data.data?.products?.edges || [];
 
     for (const { node: product } of products) {
+      // 1. Upsert Product
       const savedProduct = await db.product.upsert({
         where: { shop_shopifyProductId: { shop, shopifyProductId: product.id } },
         update: { title: product.title },
         create: { shop, shopifyProductId: product.id, title: product.title },
       });
 
-      for (const { node: variant } of product.variants.edges) {
-        const costPerItem = variant.inventoryItem?.unitCost?.amount
-          ? parseFloat(variant.inventoryItem.unitCost.amount)
-          : null;
+      // 2. Upsert all variants in parallel (Much faster!)
+      await Promise.all(
+        product.variants.edges.map(({ node: variant }: any) => {
+          const costPerItem = variant.inventoryItem?.unitCost?.amount
+            ? parseFloat(variant.inventoryItem.unitCost.amount)
+            : null;
 
-        await db.productVariant.upsert({
-          where: {
-            productId_shopifyVariantId: {
+          return db.productVariant.upsert({
+            where: {
+              productId_shopifyVariantId: {
+                productId: savedProduct.id,
+                shopifyVariantId: variant.id,
+              },
+            },
+            update: {
+              title: variant.title,
+              sku: variant.sku ?? null,
+              shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              costPerItem,
+              effectiveCost: costPerItem, // Sets baseline effective cost
+            },
+            create: {
               productId: savedProduct.id,
               shopifyVariantId: variant.id,
+              title: variant.title,
+              sku: variant.sku ?? null,
+              shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              costPerItem,
+              effectiveCost: costPerItem,
             },
-          },
-          update: {
-            title: variant.title,
-            sku: variant.sku ?? null,
-            shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
-            costPerItem,
-            effectiveCost: costPerItem,
-          },
-          create: {
-            productId: savedProduct.id,
-            shopifyVariantId: variant.id,
-            title: variant.title,
-            sku: variant.sku ?? null,
-            shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
-            costPerItem,
-            effectiveCost: costPerItem,
-          },
-        });
-      }
+          });
+        })
+      );
     }
 
     cursor = data.data?.products?.pageInfo?.hasNextPage
       ? data.data?.products?.pageInfo?.endCursor
       : null;
+      
   } while (cursor);
 
   console.log(`[COGS Sync] Complete for ${shop}`);

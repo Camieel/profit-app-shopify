@@ -12,19 +12,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log(`[GDPR] shop/redact received for ${shop}. Deleting all shop data.`);
 
   try {
-    // Delete in correct order to respect foreign key constraints
-    await db.alert.deleteMany({ where: { shop } });
-    await db.orderLineItem.deleteMany({
-      where: { order: { shop } },
-    });
-    await db.order.deleteMany({ where: { shop } });
-    await db.productVariant.deleteMany({
-      where: { product: { shop } },
-    });
-    await db.product.deleteMany({ where: { shop } });
-    await db.shopSettings.deleteMany({ where: { shop } });
-    await db.session.deleteMany({ where: { shop } });
-    await db.shop.deleteMany({ where: { shop } });
+    // We gebruiken een transactie om te zorgen dat het 'alles of niets' is. 
+    // Faalt er één, dan worden ze allemaal ongedaan gemaakt (rollback).
+    await db.$transaction([
+      db.alert.deleteMany({ where: { shop } }),
+      db.orderLineItem.deleteMany({ where: { order: { shop } } }),
+      db.order.deleteMany({ where: { shop } }),
+      db.productVariant.deleteMany({ where: { product: { shop } } }),
+      db.product.deleteMany({ where: { shop } }),
+      db.shopSettings.deleteMany({ where: { shop } }),
+      db.session.deleteMany({ where: { shop } }),
+      
+      // De ontbrekende tabellen uit je andere routes:
+      db.expense.deleteMany({ where: { shop } }),
+      db.adIntegration.deleteMany({ where: { shop } }),
+      db.adSpend.deleteMany({ where: { shop } }),
+      
+      // En als allerlaatste de shop zelf verwijderen
+      db.shop.deleteMany({ where: { shop } }),
+    ]);
 
     console.log(`[GDPR] shop/redact complete for ${shop}`);
   } catch (err) {

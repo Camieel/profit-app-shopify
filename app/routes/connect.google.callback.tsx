@@ -1,4 +1,3 @@
-
 // app/routes/connect.google.callback.tsx
 
 import type { LoaderFunctionArgs } from "@remix-run/node";
@@ -20,9 +19,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=google_auth_failed"));
   }
 
-  const clientId = process.env.GOOGLE_CLIENT_ID!;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-  const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/google/callback`;
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const developerToken = process.env.GOOGLE_DEVELOPER_TOKEN;
+  const appUrl = process.env.SHOPIFY_APP_URL;
+
+  // Veiligheidscheck voor je environment variables
+  if (!clientId || !clientSecret || !developerToken || !appUrl) {
+    console.error("[Google OAuth] Missing required environment variables.");
+    return redirect(buildShopifyAdminUrl(shopDomain, "settings?error=google_config_missing"));
+  }
+
+  const redirectUri = `${appUrl}/connect/google/callback`;
 
   try {
     // Exchange code for tokens
@@ -53,7 +61,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!,
+          "developer-token": developerToken,
         },
       }
     );
@@ -73,7 +81,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           {
             headers: {
               Authorization: `Bearer ${accessToken}`,
-              "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!,
+              "developer-token": developerToken,
             },
           }
         );
@@ -87,7 +95,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     );
 
     // Store pending token + refresh token
-    await (db as any).adIntegration.upsert({
+    await db.adIntegration.upsert({
       where: { shop_platform: { shop, platform: "google_pending" } },
       update: {
         accessToken: JSON.stringify({ accessToken, refreshToken }),
@@ -105,14 +113,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     if (accounts.length === 1) {
       // Auto-select if only one account
-      await saveGoogleIntegration(shop, accessToken, refreshToken, accounts[0].id, accounts[0].name);
+      await saveGoogleIntegration(shop, accessToken, refreshToken, accounts[0].id, accounts[0].name, developerToken);
       return redirect(buildShopifyAdminUrl(shopDomain, "settings?success=google_connected"));
     }
 
-    // Multiple accounts — show selector
+    // Multiple accounts — show selector (gefixt: meta/ weggehaald)
     const accountsParam = encodeURIComponent(JSON.stringify(accounts));
     return redirect(
-      buildShopifyAdminUrl(shopDomain, `meta/select-account?accounts=${accountsParam}&platform=google`)
+      buildShopifyAdminUrl(shopDomain, `select-account?accounts=${accountsParam}&platform=google`)
     );
   } catch (err) {
     console.error("[Google OAuth] Error:", err);
@@ -130,9 +138,10 @@ async function saveGoogleIntegration(
   accessToken: string,
   refreshToken: string,
   accountId: string,
-  accountName: string
+  accountName: string,
+  developerToken: string
 ) {
-  await (db as any).adIntegration.upsert({
+  await db.adIntegration.upsert({
     where: { shop_platform: { shop, platform: "google" } },
     update: {
       accessToken: JSON.stringify({ accessToken, refreshToken }),
@@ -150,13 +159,13 @@ async function saveGoogleIntegration(
     },
   });
 
-  syncGoogleSpend(shop, accessToken, accountId).catch(console.error);
+  syncGoogleSpend(shop, accessToken, accountId, developerToken).catch(console.error);
 }
 
-async function syncGoogleSpend(shop: string, accessToken: string, customerId: string) {
+async function syncGoogleSpend(shop: string, accessToken: string, customerId: string, developerToken: string) {
   const since = new Date();
   since.setDate(since.getDate() - 30);
-  const sinceStr = since.toISOString().split("T")[0].replace(/-/g, "-");
+  const sinceStr = since.toISOString().split("T")[0]; // Gefixt: overbodige .replace verwijderd
   const untilStr = new Date().toISOString().split("T")[0];
 
   const query = `
@@ -175,12 +184,13 @@ async function syncGoogleSpend(shop: string, accessToken: string, customerId: st
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!,
+        "developer-token": developerToken,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query }),
     }
   );
+  
   const data = await res.json() as any;
 
   // Aggregate by date
@@ -201,7 +211,7 @@ async function syncGoogleSpend(shop: string, accessToken: string, customerId: st
   }
 
   for (const [date, metrics] of byDate) {
-    await (db as any).adSpend.upsert({
+    await db.adSpend.upsert({
       where: { shop_platform_date: { shop, platform: "google", date } },
       update: { ...metrics, syncedAt: new Date() },
       create: { shop, platform: "google", date, ...metrics },

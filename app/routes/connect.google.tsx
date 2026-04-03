@@ -9,8 +9,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   if (!shop) return new Response("Missing shop", { status: 400 });
 
-  const clientId = process.env.GOOGLE_CLIENT_ID!;
-  const redirectUri = `${process.env.SHOPIFY_APP_URL}/connect/google/callback`;
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const appUrl = process.env.SHOPIFY_APP_URL;
+
+  // Veiligheidscheck: voorkomt onverwachte 500 server crashes als variabelen missen
+  if (!clientId || !appUrl) {
+    console.error("[Google OAuth] Missing GOOGLE_CLIENT_ID or SHOPIFY_APP_URL in environment variables.");
+    return new Response("Server configuration error", { status: 500 });
+  }
+
+  const redirectUri = `${appUrl}/connect/google/callback`;
   const state = Buffer.from(shop).toString("base64");
 
   const scopes = [

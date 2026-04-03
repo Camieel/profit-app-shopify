@@ -1,3 +1,5 @@
+// app/routes/webhooks.orders.create.tsx
+
 import type { ActionFunctionArgs } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -20,28 +22,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const settings = await db.shopSettings.findUnique({ where: { shop } });
 
     // 1. Revenue — altijd shop_money zodat multi-currency totalen kloppen
-const revenue = parseFloat(order.total_price_set?.shop_money?.amount || order.total_price || "0");
-const shippingRevenue = parseFloat(order.total_shipping_price_set?.shop_money?.amount || "0");
-const discounts = parseFloat(order.total_discounts_set?.shop_money?.amount || order.total_discounts || "0");
-const shopCurrency = order.presentment_currency !== order.currency
-  ? order.currency  // shop currency
-  : order.currency;
+    const revenue = parseFloat(order.total_price_set?.shop_money?.amount || order.total_price || "0");
+    const shippingRevenue = parseFloat(order.total_shipping_price_set?.shop_money?.amount || "0");
+    const discounts = parseFloat(order.total_discounts_set?.shop_money?.amount || order.total_discounts || "0");
 
     // 2. Transaction fees
     const feePercent = settings?.transactionFeePercent ?? 2.9;
     const feeFixed = settings?.transactionFeeFixed ?? 0.30;
     const extraPercent = settings?.shopifyExtraFeePercent ?? 0;
-    const transactionFee =
-      revenue * (feePercent / 100) + feeFixed + revenue * (extraPercent / 100);
+    const transactionFee = revenue * (feePercent / 100) + feeFixed + revenue * (extraPercent / 100);
 
-    // 3. COGS
+    // 3. COGS (Cost of Goods Sold)
     const variantIds = order.line_items
       .filter((item: any) => item.variant_id)
       .map((item: any) => String(item.variant_id));
 
-    const gidVariantIds = variantIds.map(
-      (id: string) => `gid://shopify/ProductVariant/${id}`
-    );
+    const gidVariantIds = variantIds.map((id: string) => `gid://shopify/ProductVariant/${id}`);
 
     const variants = await db.productVariant.findMany({
       where: { shopifyVariantId: { in: [...variantIds, ...gidVariantIds] } },
@@ -67,13 +63,13 @@ const shopCurrency = order.presentment_currency !== order.currency
       totalCogs += itemCogs;
 
       lineItemsData.push({
-        id: generateCuid(), // Voeg handmatig ID toe aan line items
+        id: generateCuid(),
         shopifyVariantId: String(item.variant_id),
         productTitle: item.title,
         variantTitle: item.variant_title ?? null,
         quantity: item.quantity,
         price: parseFloat(item.price_set?.shop_money?.amount || item.price || "0"),
-discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_discount || "0"),
+        discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_discount || "0"),
         cogs: itemCogs,
         cogsFound: !!effectiveCost,
       });
@@ -82,28 +78,32 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
     // 4. Shipping cost
     const shippingCost = settings?.defaultShippingCost ?? 0;
 
-    // 5. Ad spend allocation
+    // 5. Ad spend allocation (Geoptimaliseerd met Prisma aggregate)
     let adSpendAllocated = 0;
     try {
-      const today = new Date().toISOString().split("T")[0];
-      const todaySpend = await (db as any).adSpend.findMany({
-        where: { shop, date: today },
+      const todayDate = new Date();
+      const todayStr = todayDate.toISOString().split("T")[0];
+      
+      const todaySpend = await db.adSpend.findMany({
+        where: { shop, date: todayStr },
       });
 
       if (todaySpend.length > 0) {
         const totalSpend = todaySpend.reduce((s: number, d: any) => s + d.spend, 0);
 
-        const todayOrders = await db.order.findMany({
+        // Voorkom RAM crash: Bereken het totaal direct in de database
+        const todayAgg = await db.order.aggregate({
           where: {
             shop,
             shopifyCreatedAt: {
-              gte: new Date(today),
-              lt: new Date(new Date(today).getTime() + 86400000),
+              gte: new Date(`${todayStr}T00:00:00.000Z`),
+              lt: new Date(todayDate.getTime() + 86400000), // Morgen
             },
           },
+          _sum: { totalPrice: true }
         });
 
-        const todayRevenue = todayOrders.reduce((s, o) => s + o.totalPrice, 0) + revenue;
+        const todayRevenue = (todayAgg._sum.totalPrice ?? 0) + revenue;
 
         if (todayRevenue > 0) {
           adSpendAllocated = (revenue / todayRevenue) * totalSpend;
@@ -118,35 +118,35 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
     const netProfit = revenue - totalCogs - transactionFee - shippingCost - adSpendAllocated;
     const marginPercent = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
-    // 7. Save to DB
-    const orderId = generateCuid(); // Genereer handmatig het Order ID
+    // 7. Save to DB (Zonder as any!)
+    const orderId = generateCuid(); 
     
-    const savedOrder = await (db.order.create as any)({
-  data: {
-    id: orderId,
-    shop,
-    shopifyOrderId: `gid://shopify/Order/${order.id}`,
-    shopifyOrderName: order.name,
-    totalPrice: revenue,
-    subtotalPrice: parseFloat(order.subtotal_price_set?.shop_money?.amount || order.subtotal_price || "0"),
-    totalTax: parseFloat(order.total_tax_set?.shop_money?.amount || order.total_tax || "0"),
-    totalDiscounts: discounts,
-    shippingRevenue,
-    currency: order.currency,
-    cogs: totalCogs,
-    transactionFee,
-    shippingCost,
-    adSpendAllocated,
-    grossProfit,
-    netProfit,
-    marginPercent,
-    cogsComplete,
-    financialStatus: order.financial_status ?? null,
-    fulfillmentStatus: order.fulfillment_status ?? null,
-    shopifyCreatedAt: new Date(order.created_at),
-    lineItems: { create: lineItemsData },
-  },
-});
+    const savedOrder = await db.order.create({
+      data: {
+        id: orderId,
+        shop,
+        shopifyOrderId: `gid://shopify/Order/${order.id}`,
+        shopifyOrderName: order.name,
+        totalPrice: revenue,
+        subtotalPrice: parseFloat(order.subtotal_price_set?.shop_money?.amount || order.subtotal_price || "0"),
+        totalTax: parseFloat(order.total_tax_set?.shop_money?.amount || order.total_tax || "0"),
+        totalDiscounts: discounts,
+        shippingRevenue,
+        currency: order.currency,
+        cogs: totalCogs,
+        transactionFee,
+        shippingCost,
+        adSpendAllocated,
+        grossProfit,
+        netProfit,
+        marginPercent,
+        cogsComplete,
+        financialStatus: order.financial_status ?? null,
+        fulfillmentStatus: order.fulfillment_status ?? null,
+        shopifyCreatedAt: new Date(order.created_at),
+        lineItems: { create: lineItemsData },
+      },
+    });
 
     console.log(
       `[Order Saved] ${order.name} | Margin: ${marginPercent.toFixed(1)}% | Net: ${netProfit.toFixed(2)} | Ad spend: $${adSpendAllocated.toFixed(2)}`
@@ -161,7 +161,7 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
       marginPercent,
       netProfit,
       revenue,
-    }).catch(console.error);
+    }).catch((err) => console.error("[Flow Trigger] Error:", err));
 
     // 9. Hold + alert logic
     if (settings?.holdEnabled || settings?.alertEnabled) {
@@ -171,6 +171,8 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
         (netProfit < 0 || (marginThreshold > 0 && marginPercent < marginThreshold));
 
       let fo: any = null;
+      let holdSucceeded = false;
+      let holdFailureReason = "";
 
       if (shouldHold) {
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -198,7 +200,7 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
         }
 
         if (fo) {
-          await admin.graphql(
+          const holdMutationRes = await admin.graphql(
             `#graphql
             mutation holdFulfillment($id: ID!, $reasonNotes: String!) {
               fulfillmentOrderHold(id: $id, fulfillmentHold: { reason: OTHER, reasonNotes: $reasonNotes }) {
@@ -213,16 +215,28 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
               },
             }
           );
+          
+          const holdMutationData: any = await holdMutationRes.json();
+          const errors = holdMutationData.data?.fulfillmentOrderHold?.userErrors;
+
+          // Check of Shopify de hold daadwerkelijk accepteert
+          if (!errors || errors.length === 0) {
+            holdSucceeded = true;
+            console.log(`[Hold Placed] ${order.name}`);
+          } else {
+            holdFailureReason = errors[0].message;
+            console.error(`[Hold Failed] ${order.name}:`, holdFailureReason);
+          }
 
           await db.order.update({
             where: { id: savedOrder.id },
             data: {
-              isHeld: !!fo,
-              heldReason: `Margin ${marginPercent.toFixed(1)}% below threshold`,
+              isHeld: holdSucceeded,
+              heldReason: holdSucceeded 
+                ? `Margin ${marginPercent.toFixed(1)}% below threshold` 
+                : `Hold failed: ${holdFailureReason}`,
             },
           });
-
-          console.log(`[Hold Placed] ${order.name}`);
         }
       }
 
@@ -257,20 +271,20 @@ discount: parseFloat(item.total_discount_set?.shop_money?.amount || item.total_d
 
         // Verzend de email als er een adres is ingesteld
         if (settings?.alertEmail) {
-  await sendAlertEmail({
-    to: settings.alertEmail,
-    orderName: order.name,
-    marginPercent,
-    netProfit,
-    revenue,
-    cogs: totalCogs,
-    transactionFee,
-    shippingCost,
-    adSpend: adSpendAllocated,
-    reason: alertType === "negative_profit" ? "This order is losing money" : "Margin below your alert threshold",
-    isHeld: shouldHold && !!fo,
-  });
-}
+          await sendAlertEmail({
+            to: settings.alertEmail,
+            orderName: order.name,
+            marginPercent,
+            netProfit,
+            revenue,
+            cogs: totalCogs,
+            transactionFee,
+            shippingCost,
+            adSpend: adSpendAllocated,
+            reason: alertType === "negative_profit" ? "This order is losing money" : "Margin below your alert threshold",
+            isHeld: holdSucceeded,
+          }).catch(err => console.error("[Alert Email] Failed to send:", err));
+        }
       }
     }
   } catch (err) {
