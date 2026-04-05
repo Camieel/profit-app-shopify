@@ -105,6 +105,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const since = new Date(); since.setDate(since.getDate() - 30);
       const sinceStr = since.toISOString().split("T")[0];
       const untilStr = new Date().toISOString().split("T")[0];
+
+      // Fetch account-level daily totals (existing)
       const res = await fetch(
         `https://graph.facebook.com/v19.0/${integration.accountId}/insights?fields=spend,impressions,clicks,date_start&time_increment=1&time_range={"since":"${sinceStr}","until":"${untilStr}"}&access_token=${integration.accessToken}`
       );
@@ -118,6 +120,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
         synced++;
       }
+
+      // Fetch campaign-level breakdown (new)
+      const campaignRes = await fetch(
+        `https://graph.facebook.com/v19.0/${integration.accountId}/insights?` +
+        `level=campaign&fields=campaign_id,campaign_name,spend,impressions,clicks,date_start&` +
+        `time_increment=1&time_range={"since":"${sinceStr}","until":"${untilStr}"}&` +
+        `access_token=${integration.accessToken}`
+      );
+      const campaignData = (await campaignRes.json()) as any;
+      for (const row of campaignData.data ?? []) {
+        if (!row.campaign_id || !row.date_start) continue;
+        await (db as any).adCampaign.upsert({
+          where: { shop_platform_campaignId_date: { shop: session.shop, platform: "meta", campaignId: row.campaign_id, date: row.date_start } },
+          update: {
+            campaignName: row.campaign_name ?? row.campaign_id,
+            spend: parseFloat(row.spend ?? "0"),
+            impressions: parseInt(row.impressions ?? "0"),
+            clicks: parseInt(row.clicks ?? "0"),
+            syncedAt: new Date(),
+          },
+          create: {
+            shop: session.shop,
+            platform: "meta",
+            campaignId: row.campaign_id,
+            campaignName: row.campaign_name ?? row.campaign_id,
+            date: row.date_start,
+            spend: parseFloat(row.spend ?? "0"),
+            impressions: parseInt(row.impressions ?? "0"),
+            clicks: parseInt(row.clicks ?? "0"),
+          },
+        });
+      }
+
       return json({ success: true, synced, platform: "meta" });
     } catch (err) {
       console.error("[Meta Manual Sync]", err);
@@ -133,25 +168,70 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const since = new Date(); since.setDate(since.getDate() - 30);
       const sinceStr = since.toISOString().split("T")[0];
       const untilStr = new Date().toISOString().split("T")[0];
-      const query = `SELECT segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks FROM campaign WHERE segments.date BETWEEN '${sinceStr}' AND '${untilStr}'`;
+
+      // Campaign-level query (includes campaign.id and campaign.name — no separate call needed)
+      const query = `
+        SELECT campaign.id, campaign.name, segments.date,
+               metrics.cost_micros, metrics.impressions, metrics.clicks
+        FROM campaign
+        WHERE segments.date BETWEEN '${sinceStr}' AND '${untilStr}'
+      `;
       const res = await fetch(`https://googleads.googleapis.com/v17/customers/${integration.accountId}/googleAds:search`, {
         method: "POST",
         headers: { Authorization: `Bearer ${tokens.accessToken}`, "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!, "Content-Type": "application/json" },
         body: JSON.stringify({ query }),
       });
       const data = (await res.json()) as any;
+
+      // Aggregate to daily totals for adSpend (existing behaviour)
       const byDate = new Map<string, { spend: number; impressions: number; clicks: number }>();
       for (const row of data.results ?? []) {
         const date = row.segments?.date;
         if (!date) continue;
         const existing = byDate.get(date) ?? { spend: 0, impressions: 0, clicks: 0 };
-        byDate.set(date, { spend: existing.spend + (row.metrics?.costMicros ?? 0) / 1_000_000, impressions: existing.impressions + (row.metrics?.impressions ?? 0), clicks: existing.clicks + (row.metrics?.clicks ?? 0) });
+        byDate.set(date, {
+          spend:       existing.spend + (row.metrics?.costMicros ?? 0) / 1_000_000,
+          impressions: existing.impressions + (row.metrics?.impressions ?? 0),
+          clicks:      existing.clicks + (row.metrics?.clicks ?? 0),
+        });
       }
       let synced = 0;
       for (const [date, metrics] of byDate) {
-        await (db as any).adSpend.upsert({ where: { shop_platform_date: { shop: session.shop, platform: "google", date } }, update: { ...metrics, syncedAt: new Date() }, create: { shop: session.shop, platform: "google", date, ...metrics } });
+        await (db as any).adSpend.upsert({
+          where: { shop_platform_date: { shop: session.shop, platform: "google", date } },
+          update: { ...metrics, syncedAt: new Date() },
+          create: { shop: session.shop, platform: "google", date, ...metrics },
+        });
         synced++;
       }
+
+      // Upsert campaign-level rows (new)
+      for (const row of data.results ?? []) {
+        const date = row.segments?.date;
+        const campaignId = String(row.campaign?.id ?? "");
+        if (!date || !campaignId) continue;
+        await (db as any).adCampaign.upsert({
+          where: { shop_platform_campaignId_date: { shop: session.shop, platform: "google", campaignId, date } },
+          update: {
+            campaignName: row.campaign?.name ?? campaignId,
+            spend:       (row.metrics?.costMicros ?? 0) / 1_000_000,
+            impressions: row.metrics?.impressions ?? 0,
+            clicks:      row.metrics?.clicks ?? 0,
+            syncedAt:    new Date(),
+          },
+          create: {
+            shop: session.shop,
+            platform: "google",
+            campaignId,
+            campaignName: row.campaign?.name ?? campaignId,
+            date,
+            spend:       (row.metrics?.costMicros ?? 0) / 1_000_000,
+            impressions: row.metrics?.impressions ?? 0,
+            clicks:      row.metrics?.clicks ?? 0,
+          },
+        });
+      }
+
       return json({ success: true, synced, platform: "google" });
     } catch (err) {
       console.error("[Google Manual Sync]", err);
@@ -164,19 +244,77 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!integration?.isActive) return json({ error: "TikTok not connected" }, { status: 400 });
     try {
       const since = new Date(); since.setDate(since.getDate() - 30);
+      const sinceStr = since.toISOString().split("T")[0];
+      const untilStr = new Date().toISOString().split("T")[0];
+
+      // Account-level daily totals (existing)
       const res = await fetch("https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/", {
         method: "POST",
         headers: { "Access-Token": integration.accessToken, "Content-Type": "application/json" },
-        body: JSON.stringify({ advertiser_id: integration.accountId, report_type: "BASIC", dimensions: ["stat_time_day"], metrics: ["spend", "impressions", "clicks"], start_date: since.toISOString().split("T")[0], end_date: new Date().toISOString().split("T")[0], page_size: 100 }),
+        body: JSON.stringify({
+          advertiser_id: integration.accountId,
+          report_type: "BASIC",
+          dimensions: ["stat_time_day"],
+          metrics: ["spend", "impressions", "clicks"],
+          start_date: sinceStr,
+          end_date: untilStr,
+          page_size: 100,
+        }),
       });
       const data = (await res.json()) as any;
       let synced = 0;
       for (const row of data.data?.list ?? []) {
         const date = row.dimensions?.stat_time_day?.split(" ")[0];
         if (!date) continue;
-        await (db as any).adSpend.upsert({ where: { shop_platform_date: { shop: session.shop, platform: "tiktok", date } }, update: { spend: parseFloat(row.metrics?.spend ?? "0"), impressions: parseInt(row.metrics?.impressions ?? "0"), clicks: parseInt(row.metrics?.clicks ?? "0"), syncedAt: new Date() }, create: { shop: session.shop, platform: "tiktok", date, spend: parseFloat(row.metrics?.spend ?? "0"), impressions: parseInt(row.metrics?.impressions ?? "0"), clicks: parseInt(row.metrics?.clicks ?? "0") } });
+        await (db as any).adSpend.upsert({
+          where: { shop_platform_date: { shop: session.shop, platform: "tiktok", date } },
+          update: { spend: parseFloat(row.metrics?.spend ?? "0"), impressions: parseInt(row.metrics?.impressions ?? "0"), clicks: parseInt(row.metrics?.clicks ?? "0"), syncedAt: new Date() },
+          create: { shop: session.shop, platform: "tiktok", date, spend: parseFloat(row.metrics?.spend ?? "0"), impressions: parseInt(row.metrics?.impressions ?? "0"), clicks: parseInt(row.metrics?.clicks ?? "0") },
+        });
         synced++;
       }
+
+      // Campaign-level breakdown (new) — add campaign_id to dimensions
+      const campaignRes = await fetch("https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/", {
+        method: "POST",
+        headers: { "Access-Token": integration.accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          advertiser_id: integration.accountId,
+          report_type: "BASIC",
+          dimensions: ["campaign_id", "stat_time_day"],
+          metrics: ["campaign_name", "spend", "impressions", "clicks"],
+          start_date: sinceStr,
+          end_date: untilStr,
+          page_size: 100,
+        }),
+      });
+      const campaignData = (await campaignRes.json()) as any;
+      for (const row of campaignData.data?.list ?? []) {
+        const date = row.dimensions?.stat_time_day?.split(" ")[0];
+        const campaignId = String(row.dimensions?.campaign_id ?? "");
+        if (!date || !campaignId) continue;
+        await (db as any).adCampaign.upsert({
+          where: { shop_platform_campaignId_date: { shop: session.shop, platform: "tiktok", campaignId, date } },
+          update: {
+            campaignName: row.metrics?.campaign_name ?? campaignId,
+            spend:       parseFloat(row.metrics?.spend ?? "0"),
+            impressions: parseInt(row.metrics?.impressions ?? "0"),
+            clicks:      parseInt(row.metrics?.clicks ?? "0"),
+            syncedAt:    new Date(),
+          },
+          create: {
+            shop: session.shop,
+            platform: "tiktok",
+            campaignId,
+            campaignName: row.metrics?.campaign_name ?? campaignId,
+            date,
+            spend:       parseFloat(row.metrics?.spend ?? "0"),
+            impressions: parseInt(row.metrics?.impressions ?? "0"),
+            clicks:      parseInt(row.metrics?.clicks ?? "0"),
+          },
+        });
+      }
+
       return json({ success: true, synced, platform: "tiktok" });
     } catch (err) {
       console.error("[TikTok Manual Sync]", err);

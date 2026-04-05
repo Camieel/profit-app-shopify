@@ -59,6 +59,7 @@ export default function App() {
           <s-link href="/app/shipping">Shipping Cost</s-link>
           <s-link href="/app/cogs">Cogs cost</s-link>
           <s-link href="/app/payment">Payment</s-link>
+          <s-link href="/app/ads">Ads</s-link>
         </s-app-nav>
         <Outlet />
       </PolarisAppProvider>

@@ -227,3 +227,20 @@ model AdSpend {
   
   @@unique([shop, platform, date])
 }
+
+model AdCampaign {
+  id           String   @id @default(cuid())
+  shop         String
+  platform     String
+  campaignId   String
+  campaignName String
+  date         String
+  spend        Float    @default(0)
+  impressions  Int      @default(0)
+  clicks       Int      @default(0)
+  syncedAt     DateTime @default(now())
+
+  @@unique([shop, platform, campaignId, date])
+  @@index([shop, platform, date])
+  @@index([shop, date])
+}
