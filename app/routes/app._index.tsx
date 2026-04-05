@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
 import { useLoaderData, useSubmit, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { useState, useEffect, useCallback } from "react";
 import {
@@ -328,6 +328,15 @@ function analyzeLossReasons(
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const { shop } = session;
+
+  // Redirect to onboarding if not yet completed
+  const onboardingCheck = await db.shopSettings.findUnique({
+    where: { shop },
+    select: { onboardingComplete: true },
+  });
+  if (!onboardingCheck?.onboardingComplete) {
+    return redirect("/app/onboarding");
+  }
 
   const url = new URL(request.url);
   const now = new Date();
