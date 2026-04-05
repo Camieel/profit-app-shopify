@@ -325,6 +325,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
+
+// ── Platform logos (inline SVG) ───────────────────────────────────────────────
+function MetaLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2.04C6.48 2.04 2 6.53 2 12.06C2 17.06 5.66 21.21 10.44 21.96V14.96H7.9V12.06H10.44V9.85C10.44 7.34 11.93 5.96 14.22 5.96C15.31 5.96 16.45 6.15 16.45 6.15V8.62H15.19C13.95 8.62 13.56 9.39 13.56 10.18V12.06H16.34L15.89 14.96H13.56V21.96C18.34 21.21 22 17.06 22 12.06C22 6.53 17.52 2.04 12 2.04Z" fill="#1877F2"/>
+    </svg>
+  );
+}
+function GoogleAdsLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.06 16.875L8.625 7.125L11.4 8.7L5.835 18.45L3.06 16.875Z" fill="#FBBC04"/>
+      <path d="M15.375 7.125L20.94 16.875L18.165 18.45L12.6 8.7L15.375 7.125Z" fill="#34A853"/>
+      <circle cx="19.5" cy="18" r="2.5" fill="#EA4335"/>
+      <circle cx="4.5" cy="18" r="2.5" fill="#4285F4"/>
+      <circle cx="12" cy="5.5" r="2.5" fill="#FBBC04"/>
+    </svg>
+  );
+}
+function TikTokLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.93a8.19 8.19 0 004.79 1.54V7.04a4.85 4.85 0 01-1.02-.35z" fill="#000000"/>
+    </svg>
+  );
+}
+
 // ── Helper ────────────────────────────────────────────────────────────────────
 function fmtCurrency(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n);
@@ -667,10 +695,11 @@ export default function SettingsPage() {
 
 // ── Ad platform row — extracted to avoid repetition ───────────────────────────
 function renderAdPlatform({
-  label, connected, accountName, onConnect, onDisconnect, onSync,
+  label, logo, connected, accountName, onConnect, onDisconnect, onSync,
   isSyncing, syncResult, platform,
 }: {
   label: string;
+  logo?: React.ReactNode;
   connected: boolean;
   accountName: string | null;
   onConnect: () => void;
@@ -686,7 +715,10 @@ function renderAdPlatform({
       <InlineStack align="space-between" blockAlign="center">
         <BlockStack gap="050">
           <InlineStack gap="200" blockAlign="center">
+            <InlineStack gap="150" blockAlign="center">
+            {logo && <span style={{ display: "flex", alignItems: "center" }}>{logo}</span>}
             <Text variant="bodyMd" as="p" fontWeight="semibold">{label}</Text>
+          </InlineStack>
             {connected && <Badge tone="success">Connected</Badge>}
           </InlineStack>
           <Text variant="bodySm" as="p" tone="subdued">
