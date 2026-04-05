@@ -1,8 +1,8 @@
 // app/routes/app.orders.tsx
 
-import type { LoaderFunctionArgs } from "@remix-run/node";
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigation, useSearchParams, useNavigate, useLocation } from "react-router";
+import { useLoaderData, useNavigation, useSearchParams, useNavigate, useLocation, useFetcher } from "react-router";
 import { useState } from "react";
 import {
   Page, Layout, Card, DataTable, Text, Badge, Box, InlineStack,
@@ -15,6 +15,7 @@ import db from "../db.server";
 
 const PAGE_SIZE = 25;
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface OrderRow {
   id: string;
   shopifyOrderId: string;
@@ -33,6 +34,10 @@ interface OrderRow {
   isHeld: boolean;
   cogsComplete: boolean;
   financialStatus: string | null;
+  // New: dominant cost driver per order
+  topCostReason: string;
+  // New: how many loss orders in the period share this reason
+  repeatLossCount: number;
 }
 
 interface LossSummary {
@@ -74,16 +79,34 @@ interface LoaderData {
   status: string;
   profitability: string;
   cogsFilter: string;
+  reason: string; // new: reason filter
   page: number;
   totalPages: number;
   totalCount: number;
   shop: string;
 }
 
+// ── Helpers (server-side) ─────────────────────────────────────────────────────
 function toDateString(date: Date) {
   return date.toISOString().split("T")[0];
 }
 
+// New: compute dominant cost driver for an order
+function getTopCostReason(o: {
+  adSpendAllocated: number;
+  cogs: number;
+  shippingCost: number;
+  transactionFee: number;
+}): string {
+  return [
+    { label: "Ads", value: o.adSpendAllocated ?? 0 },
+    { label: "COGS", value: o.cogs ?? 0 },
+    { label: "Shipping", value: o.shippingCost ?? 0 },
+    { label: "Fees", value: o.transactionFee ?? 0 },
+  ].reduce((max, c) => c.value > max.value ? c : max).label;
+}
+
+// ── Loader ────────────────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const { shop } = session;
@@ -97,6 +120,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const status = url.searchParams.get("status") || "all";
   const profitability = url.searchParams.get("profitability") || "all";
   const cogsFilter = url.searchParams.get("cogs") || "all";
+  const reason = url.searchParams.get("reason") || "all"; // new
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
 
   const since = new Date(dateFrom + "T00:00:00.000Z");
@@ -113,7 +137,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   else if (status === "paid") where.financialStatus = "paid";
   else if (status === "pending") where.financialStatus = "pending";
   else if (status === "cancelled") where.financialStatus = { in: ["voided", "cancelled"] };
-  else if (status === "clear") { where.isHeld = false; where.financialStatus = { notIn: ["refunded", "partially_refunded"] }; }
+  else if (status === "clear") {
+    where.isHeld = false;
+    where.financialStatus = { notIn: ["refunded", "partially_refunded"] };
+  }
 
   if (profitability === "profitable") where.netProfit = { gte: 0 };
   else if (profitability === "loss") where.netProfit = { lt: 0 };
@@ -128,6 +155,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalCount, orders, aggregations,
     heldCount, missingCogsCount, refundedCount, partialRefundCount, orderCount,
     lossAgg, worstOrdersRaw,
+    // New: fetch all loss orders to compute reason frequency counts
+    allLossOrders,
   ] = await Promise.all([
     db.order.count({ where }),
     db.order.findMany({
@@ -157,7 +186,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       take: 3,
       select: { shopifyOrderName: true, netProfit: true, currency: true },
     }),
+    // New: fetch to compute reason repeat counts for ×2 / ×3 badges
+    db.order.findMany({
+      where: { ...baseSummaryWhere, netProfit: { lt: 0 } },
+      select: {
+        adSpendAllocated: true,
+        cogs: true,
+        shippingCost: true,
+        transactionFee: true,
+      },
+    }),
   ]);
+
+  // Build reason → count map for repeat loss badges
+  const reasonCounts = new Map<string, number>();
+  for (const o of allLossOrders) {
+    const r = getTopCostReason(o);
+    reasonCounts.set(r, (reasonCounts.get(r) ?? 0) + 1);
+  }
+
+  // New: apply reason filter in-memory (topCostReason is not a DB field)
+  const reasonLabel =
+    reason === "ads" ? "Ads"
+    : reason === "cogs" ? "COGS"
+    : reason === "shipping" ? "Shipping"
+    : reason === "fees" ? "Fees"
+    : null;
+
+  const filteredOrders = reasonLabel
+    ? orders.filter((o) => getTopCostReason(o) === reasonLabel)
+    : orders;
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -179,25 +237,97 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
 
   return json({
-    orders: orders.map((o) => ({
-      id: o.id, shopifyOrderId: o.shopifyOrderId, shopifyOrderName: o.shopifyOrderName,
-      shopifyCreatedAt: o.shopifyCreatedAt.toISOString(), currency: o.currency,
-      totalPrice: o.totalPrice, totalDiscounts: o.totalDiscounts, cogs: o.cogs,
-      transactionFee: o.transactionFee, shippingCost: o.shippingCost,
-      adSpendAllocated: o.adSpendAllocated, grossProfit: o.grossProfit,
-      netProfit: o.netProfit, marginPercent: o.marginPercent,
-      isHeld: o.isHeld, cogsComplete: o.cogsComplete, financialStatus: o.financialStatus,
+    orders: filteredOrders.map((o) => ({
+      id: o.id,
+      shopifyOrderId: o.shopifyOrderId,
+      shopifyOrderName: o.shopifyOrderName,
+      shopifyCreatedAt: o.shopifyCreatedAt.toISOString(),
+      currency: o.currency,
+      totalPrice: o.totalPrice,
+      totalDiscounts: o.totalDiscounts,
+      cogs: o.cogs,
+      transactionFee: o.transactionFee,
+      shippingCost: o.shippingCost,
+      adSpendAllocated: o.adSpendAllocated,
+      grossProfit: o.grossProfit,
+      netProfit: o.netProfit,
+      marginPercent: o.marginPercent,
+      isHeld: o.isHeld,
+      cogsComplete: o.cogsComplete,
+      financialStatus: o.financialStatus,
+      // New fields
+      topCostReason: getTopCostReason(o),
+      repeatLossCount: o.netProfit < 0
+        ? (reasonCounts.get(getTopCostReason(o)) ?? 0)
+        : 0,
     })),
     summary,
     worstOrders: worstOrdersRaw.map((o) => ({
-      name: o.shopifyOrderName, netProfit: o.netProfit, currency: o.currency,
+      name: o.shopifyOrderName,
+      netProfit: o.netProfit,
+      currency: o.currency,
     })),
-    dateFrom, dateTo, status, profitability, cogsFilter,
-    page: currentPage, totalPages, totalCount, shop,
+    dateFrom,
+    dateTo,
+    status,
+    profitability,
+    cogsFilter,
+    reason, // new
+    page: currentPage,
+    totalPages,
+    totalCount,
+    shop,
   });
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Action — inline hold release (new) ────────────────────────────────────────
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session, admin } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent") as string;
+
+  if (intent === "releaseHold") {
+    const orderId = formData.get("orderId") as string;
+    const order = await db.order.findUnique({ where: { id: orderId } });
+    if (!order) return json({ error: "Order not found" }, { status: 404 });
+
+    const foResponse: any = await admin.graphql(
+      `#graphql
+       query getFulfillmentOrders($id: ID!) {
+         order(id: $id) {
+           fulfillmentOrders(first: 1) { nodes { id status } }
+         }
+       }`,
+      { variables: { id: order.shopifyOrderId } }
+    );
+    const fo = (await foResponse.json()).data?.order?.fulfillmentOrders?.nodes?.[0];
+
+    if (fo) {
+      const mutRes: any = await admin.graphql(
+        `#graphql
+         mutation releaseHold($id: ID!) {
+           fulfillmentOrderReleaseHold(id: $id) {
+             fulfillmentOrder { id status }
+             userErrors { field message }
+           }
+         }`,
+        { variables: { id: fo.id } }
+      );
+      const errors = (await mutRes.json()).data?.fulfillmentOrderReleaseHold?.userErrors;
+      if (errors?.length > 0) return json({ error: errors[0].message }, { status: 400 });
+    }
+
+    await db.order.update({
+      where: { id: orderId },
+      data: { isHeld: false, heldReason: null },
+    });
+    return json({ success: true });
+  }
+
+  return json({ error: "Unknown intent" }, { status: 400 });
+};
+
+// ── Helpers (client-side) ─────────────────────────────────────────────────────
 function formatCurrency(amount: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
     style: "currency", currency, minimumFractionDigits: 2,
@@ -209,6 +339,30 @@ function marginBadge(margin: number, cogsComplete: boolean) {
   if (margin < 0) return <Badge tone="critical">{margin.toFixed(1) + "%"}</Badge>;
   if (margin < 10) return <Badge tone="warning">{margin.toFixed(1) + "%"}</Badge>;
   return <Badge tone="success">{margin.toFixed(1) + "%"}</Badge>;
+}
+
+// New: shows dominant cost driver + repeat badge for loss orders
+function topCostBadge(reason: string, repeatCount: number, isLoss: boolean) {
+  if (!isLoss) return <Text as="span" tone="subdued">—</Text>;
+
+  const icons: Record<string, string> = {
+    Ads: "📢",
+    COGS: "📦",
+    Shipping: "🚚",
+    Fees: "💳",
+  };
+
+  return (
+    <InlineStack gap="100" blockAlign="center">
+      <Text as="span" variant="bodySm">{icons[reason] ?? "•"} {reason}</Text>
+      {repeatCount >= 3 && (
+        <Badge tone="critical">{`×${repeatCount}`}</Badge>
+      )}
+      {repeatCount >= 2 && repeatCount < 3 && (
+        <Badge tone="warning">{`×${repeatCount}`}</Badge>
+      )}
+    </InlineStack>
+  );
 }
 
 function statusBadge(isHeld: boolean, financialStatus: string | null) {
@@ -224,39 +378,139 @@ function getShopifyOrderUrl(shop: string, shopifyOrderId: string) {
   return `https://${shop}/admin/orders/${shopifyOrderId.replace("gid://shopify/Order/", "")}`;
 }
 
+// ── Inline hold release button (new) ─────────────────────────────────────────
+function ReleaseHoldButton({ orderId }: { orderId: string }) {
+  const fetcher = useFetcher();
+  const isReleasing = fetcher.state === "submitting";
+  const released = (fetcher.data as any)?.success;
+
+  if (released) {
+    return <Badge tone="success">Released</Badge>;
+  }
+
+  return (
+    <Button
+      size="slim"
+      variant="primary"
+      loading={isReleasing}
+      onClick={() =>
+        fetcher.submit(
+          { intent: "releaseHold", orderId },
+          { method: "POST" }
+        )
+      }
+    >
+      Release
+    </Button>
+  );
+}
+
+// ── Date presets (new) ────────────────────────────────────────────────────────
+function DatePresets({ onSelect }: {
+  onSelect: (from: string, to: string) => void;
+}) {
+  const today = new Date();
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+
+  const presets = [
+    { label: "Today", from: fmt(today), to: fmt(today) },
+    {
+      label: "Last 7d",
+      from: fmt(new Date(today.getTime() - 7 * 86400000)),
+      to: fmt(today),
+    },
+    {
+      label: "Last 30d",
+      from: fmt(new Date(today.getTime() - 30 * 86400000)),
+      to: fmt(today),
+    },
+    {
+      label: "This month",
+      from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)),
+      to: fmt(today),
+    },
+    {
+      label: "Last month",
+      from: fmt(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+      to: fmt(new Date(today.getFullYear(), today.getMonth(), 0)),
+    },
+  ];
+
+  return (
+    <InlineStack gap="200" wrap>
+      {presets.map((p) => (
+        <Button
+          key={p.label}
+          size="slim"
+          variant="plain"
+          onClick={() => onSelect(p.from, p.to)}
+        >
+          {p.label}
+        </Button>
+      ))}
+    </InlineStack>
+  );
+}
+
 // ── Summary card ──────────────────────────────────────────────────────────────
 function SummaryCard({ summary }: { summary: Summary }) {
   const metrics = [
-    { label: "Revenue", value: formatCurrency(summary.totalRevenue), critical: false, subtitle: null },
     {
-      label: "Net Profit", value: formatCurrency(summary.totalNetProfit),
+      label: "Revenue",
+      value: formatCurrency(summary.totalRevenue),
+      critical: false,
+      subtitle: null,
+    },
+    {
+      label: "Net Profit",
+      value: formatCurrency(summary.totalNetProfit),
       critical: summary.totalNetProfit < 0,
-      subtitle: summary.totalNetProfit < 0 ? "Losing money" : summary.totalNetProfit === 0 ? "Break even" : "Profitable",
+      subtitle:
+        summary.totalNetProfit < 0
+          ? "Losing money"
+          : summary.totalNetProfit === 0
+          ? "Break even"
+          : "Profitable",
     },
     {
-      label: "Avg Margin", value: summary.avgMargin.toFixed(1) + "%",
+      label: "Avg Margin",
+      value: summary.avgMargin.toFixed(1) + "%",
       critical: summary.avgMargin < 0,
-      subtitle: summary.avgMargin < 0 ? "Negative margin" : summary.avgMargin < 10 ? "Below target" : "Healthy",
+      subtitle:
+        summary.avgMargin < 0
+          ? "Negative margin"
+          : summary.avgMargin < 10
+          ? "Below target"
+          : "Healthy",
     },
     {
-      label: "Discounts", value: formatCurrency(summary.totalDiscounts),
-      critical: false, subtitle: summary.totalDiscounts > 0 ? "Revenue reduction" : null,
+      label: "Discounts",
+      value: formatCurrency(summary.totalDiscounts),
+      critical: false,
+      subtitle: summary.totalDiscounts > 0 ? "Revenue reduction" : null,
     },
     { label: "Orders", value: String(summary.orderCount), critical: false, subtitle: null },
     {
-      label: "On Hold", value: String(summary.heldCount), critical: summary.heldCount > 0,
+      label: "On Hold",
+      value: String(summary.heldCount),
+      critical: summary.heldCount > 0,
       subtitle: summary.heldCount > 0 ? "Cashflow blocked" : null,
     },
     {
-      label: "Refunded", value: String(summary.refundedCount), critical: summary.refundedCount > 0,
-      subtitle: summary.refundedCount > 0 ? "Revenue leakage" : null,
+      label: "Refunded",
+      value: String(summary.refundedCount),
+      critical: summary.refundedCount > 0,
+      subtitle: summary.refundedCount > 0 ? "Investigate why" : null,
     },
     {
-      label: "Partial Refund", value: String(summary.partialRefundCount),
-      critical: summary.partialRefundCount > 0, subtitle: null,
+      label: "Partial Refund",
+      value: String(summary.partialRefundCount),
+      critical: summary.partialRefundCount > 0,
+      subtitle: null,
     },
     {
-      label: "Missing COGS", value: String(summary.missingCogsCount),
+      label: "Missing COGS",
+      value: String(summary.missingCogsCount),
       critical: summary.missingCogsCount > 0,
       subtitle: summary.missingCogsCount > 0 ? "Margins inaccurate" : null,
     },
@@ -268,9 +522,17 @@ function SummaryCard({ summary }: { summary: Summary }) {
         {metrics.map((m) => (
           <BlockStack key={m.label} gap="050">
             <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
-            <Text variant="headingMd" as="p" tone={m.critical ? "critical" : undefined}>{m.value}</Text>
+            <Text variant="headingMd" as="p" tone={m.critical ? "critical" : undefined}>
+              {m.value}
+            </Text>
             {m.subtitle && (
-              <Text variant="bodySm" as="p" tone={m.critical ? "critical" : "subdued"}>{m.subtitle}</Text>
+              <Text
+                variant="bodySm"
+                as="p"
+                tone={m.critical ? "critical" : "subdued"}
+              >
+                {m.subtitle}
+              </Text>
             )}
           </BlockStack>
         ))}
@@ -293,7 +555,6 @@ function AhaHook({
   const lossPercent = orderCount > 0
     ? Math.round((lossSummary.count / orderCount) * 100) : 0;
 
-  // Fix 2: loss as % of revenue — makes the pain concrete
   const lossVsRevenue = totalRevenue > 0
     ? ((Math.abs(lossSummary.totalLoss) / totalRevenue) * 100).toFixed(1)
     : null;
@@ -352,13 +613,13 @@ function ActionCenter({
   currentSearch: string;
   navigate: (url: string) => void;
 }) {
-  // Fix 4: preserve date params, clear old filters to avoid hidden state bugs
   const buildUrl = (key: string, value: string) => {
     const params = new URLSearchParams(currentSearch);
-    // Clear all filter params before setting new one
+    // Clear all filter params before setting new one — prevents hidden state bugs
     params.delete("status");
     params.delete("profitability");
     params.delete("cogs");
+    params.delete("reason");
     params.set(key, value);
     params.set("page", "1");
     return `/app/orders?${params.toString()}`;
@@ -368,18 +629,19 @@ function ActionCenter({
 
   if (summary.lossSummary.count > 0) {
     const impact = Math.abs(summary.lossSummary.totalLoss);
-    // Fix 3: recoverable value — 60% heuristic
     const recoverable = impact * 0.6;
     actions.push({
       id: "loss",
       group: "leakage",
-      // Fix 6: stronger micro-copy
       message: `${summary.lossSummary.count} orders losing ${formatCurrency(impact)} — losing money, fix pricing or costs`,
       tone: "critical",
       buttonLabel: "Recover lost margin",
       filterKey: "profitability",
       filterValue: "loss",
-      priorityScore: Math.pow(impact, 1.2) * 0.6 + summary.lossSummary.count * 30 * 0.3 + 100 * 0.1,
+      priorityScore:
+        Math.pow(impact, 1.2) * 0.6 +
+        summary.lossSummary.count * 30 * 0.3 +
+        100 * 0.1,
       recoverable,
     });
   }
@@ -390,10 +652,13 @@ function ActionCenter({
       group: "leakage",
       message: `${summary.refundedCount} customers refunded — investigate why`,
       tone: "critical",
-      buttonLabel: "Reduce refunds",
+      buttonLabel: "Review refunds",
       filterKey: "status",
       filterValue: "refunded",
-      priorityScore: summary.refundedCount * 50 * 0.6 + summary.refundedCount * 30 * 0.3 + 50 * 0.1,
+      priorityScore:
+        summary.refundedCount * 50 * 0.6 +
+        summary.refundedCount * 30 * 0.3 +
+        50 * 0.1,
       recoverable: null,
     });
   }
@@ -421,7 +686,9 @@ function ActionCenter({
       buttonLabel: "Complete product costs",
       filterKey: "cogs",
       filterValue: "missing",
-      priorityScore: summary.missingCogsCount * 20 * 0.6 + summary.missingCogsCount * 10 * 0.3,
+      priorityScore:
+        summary.missingCogsCount * 20 * 0.6 +
+        summary.missingCogsCount * 10 * 0.3,
       recoverable: null,
     });
   }
@@ -435,13 +702,15 @@ function ActionCenter({
       buttonLabel: "Unblock cashflow",
       filterKey: "status",
       filterValue: "held",
-      priorityScore: summary.heldCount * 40 * 0.6 + summary.heldCount * 10 * 0.3,
+      priorityScore:
+        summary.heldCount * 40 * 0.6 +
+        summary.heldCount * 10 * 0.3,
       recoverable: null,
     });
   }
 
+  // Done state — gives closure instead of empty space
   if (actions.length === 0) {
-    // Fix 3: done state — gives closure instead of empty space
     return (
       <Card>
         <BlockStack gap="100">
@@ -454,7 +723,7 @@ function ActionCenter({
     );
   }
 
-  // Fix 5: tone-weighted sort — critical always beats caution at same score
+  // Tone-weighted sort — critical always beats caution at same score
   const toneWeight: Record<ActionEntry["tone"], number> = {
     critical: 1.3,
     caution: 1.1,
@@ -464,7 +733,6 @@ function ActionCenter({
     b.priorityScore * toneWeight[b.tone] - a.priorityScore * toneWeight[a.tone]
   );
 
-  // Fix 1: top recommended action
   const topAction = actions[0];
 
   const groups: { key: ActionEntry["group"]; label: string; icon: string }[] = [
@@ -482,9 +750,10 @@ function ActionCenter({
       <BlockStack gap="400">
         <Text variant="headingMd" as="h2">Action Center</Text>
 
-        {/* Fix 1: recommended next step with urgency */}
+        {/* Recommended next step */}
         <div style={{
-          padding: "16px", borderRadius: "10px",
+          padding: "16px",
+          borderRadius: "10px",
           background: topAction.tone === "critical" ? "#fff1f0" : "#fffbe6",
           border: `1px solid ${topAction.tone === "critical" ? "#ffa39e" : "#ffe58f"}`,
         }}>
@@ -503,7 +772,6 @@ function ActionCenter({
                 <Text variant="bodySm" as="p" tone="success">
                   {`Potential recovery: ~${formatCurrency(topAction.recoverable)}`}
                 </Text>
-                {/* Fix 2: credibility note */}
                 <Text variant="bodySm" as="p" tone="subdued">
                   Estimated recoverable margin
                 </Text>
@@ -512,7 +780,9 @@ function ActionCenter({
             <Box>
               <Button
                 variant="primary"
-                onClick={() => navigate(buildUrl(topAction.filterKey, topAction.filterValue))}
+                onClick={() =>
+                  navigate(buildUrl(topAction.filterKey, topAction.filterValue))
+                }
               >
                 {topAction.buttonLabel}
               </Button>
@@ -525,20 +795,43 @@ function ActionCenter({
           <BlockStack key={g.key} gap="200">
             <InlineStack gap="100" blockAlign="center">
               <span style={{ fontSize: "14px" }}>{g.icon}</span>
-              <Text variant="bodySm" as="p" fontWeight="semibold" tone="subdued">{g.label}</Text>
+              <Text variant="bodySm" as="p" fontWeight="semibold" tone="subdued">
+                {g.label}
+              </Text>
             </InlineStack>
             {g.items.map((a) => (
               <div
                 key={a.id}
                 style={{
-                  padding: "12px 16px", borderRadius: "8px",
-                  background: a.tone === "critical" ? "#fff1f0" : a.tone === "caution" ? "#fffbe6" : "#f0f9ff",
-                  border: `1px solid ${a.tone === "critical" ? "#ffa39e" : a.tone === "caution" ? "#ffe58f" : "#bae6fd"}`,
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  background:
+                    a.tone === "critical"
+                      ? "#fff1f0"
+                      : a.tone === "caution"
+                      ? "#fffbe6"
+                      : "#f0f9ff",
+                  border: `1px solid ${
+                    a.tone === "critical"
+                      ? "#ffa39e"
+                      : a.tone === "caution"
+                      ? "#ffe58f"
+                      : "#bae6fd"
+                  }`,
                 }}
               >
                 <InlineStack align="space-between" blockAlign="center" gap="400">
                   <BlockStack gap="050">
-                    <Text as="p" tone={a.tone === "critical" ? "critical" : a.tone === "caution" ? "caution" : undefined}>
+                    <Text
+                      as="p"
+                      tone={
+                        a.tone === "critical"
+                          ? "critical"
+                          : a.tone === "caution"
+                          ? "caution"
+                          : undefined
+                      }
+                    >
                       {a.message}
                     </Text>
                     {a.recoverable != null && a.recoverable > 0 && (
@@ -547,7 +840,12 @@ function ActionCenter({
                       </Text>
                     )}
                   </BlockStack>
-                  <Button size="slim" onClick={() => navigate(buildUrl(a.filterKey, a.filterValue))}>
+                  <Button
+                    size="slim"
+                    onClick={() =>
+                      navigate(buildUrl(a.filterKey, a.filterValue))
+                    }
+                  >
                     {a.buttonLabel}
                   </Button>
                 </InlineStack>
@@ -564,8 +862,8 @@ function ActionCenter({
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function OrdersPage() {
   const {
-    orders, summary, worstOrders, dateFrom, dateTo, status, profitability, cogsFilter,
-    page, totalPages, totalCount, shop,
+    orders, summary, worstOrders, dateFrom, dateTo, status, profitability,
+    cogsFilter, reason, page, totalPages, totalCount, shop,
   } = useLoaderData() as LoaderData;
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -574,7 +872,6 @@ export default function OrdersPage() {
   const location = useLocation();
   const isNavigating = navigation.state === "loading";
 
-  // Fix 5: client-side sort toggle
   const [sortMode, setSortMode] = useState<"default" | "loss">("default");
 
   const updateParam = (key: string, value: string) => {
@@ -592,10 +889,16 @@ export default function OrdersPage() {
     setSearchParams(next);
   };
 
-  // Fix 5: sort orders client-side without losing server data
   const displayOrders = sortMode === "loss"
     ? [...orders].sort((a, b) => a.netProfit - b.netProfit)
     : orders;
+
+  const reasonLabels: Record<string, string> = {
+    ads: "📢 Ads",
+    cogs: "📦 COGS",
+    shipping: "🚚 Shipping",
+    fees: "💳 Fees",
+  };
 
   const rows = displayOrders.map((order) => [
     <Button
@@ -653,7 +956,26 @@ export default function OrdersPage() {
       {marginBadge(order.marginPercent, order.cogsComplete)}
     </InlineStack>,
 
-    statusBadge(order.isHeld, order.financialStatus),
+    // New: top cost driver with repeat loss badge
+    <Box key={order.id + "-reason"}>
+      {topCostBadge(order.topCostReason, order.repeatLossCount, order.netProfit < 0)}
+    </Box>,
+
+    // New: action column — Release for held orders, View for others
+    <Box key={order.id + "-action"}>
+      {order.isHeld ? (
+        <ReleaseHoldButton orderId={order.id} />
+      ) : (
+        <Button
+          variant="plain"
+          size="slim"
+          url={getShopifyOrderUrl(shop, order.shopifyOrderId)}
+          target="_blank"
+        >
+          View ↗
+        </Button>
+      )}
+    </Box>,
   ]);
 
   return (
@@ -681,7 +1003,11 @@ export default function OrdersPage() {
                   disabled={isNavigating}
                 />
               </InlineGrid>
-              <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
+
+              {/* New: date presets */}
+              <DatePresets onSelect={updateDateRange} />
+
+              <InlineGrid columns={{ xs: 1, sm: 4 }} gap="400">
                 <Select
                   label="Status"
                   options={[
@@ -719,7 +1045,38 @@ export default function OrdersPage() {
                   onChange={(v) => updateParam("cogs", v)}
                   disabled={isNavigating}
                 />
+                {/* New: reason filter — used by dashboard Action Center links */}
+                <Select
+                  label="Top cost"
+                  options={[
+                    { label: "All reasons", value: "all" },
+                    { label: "📢 Ads", value: "ads" },
+                    { label: "📦 COGS", value: "cogs" },
+                    { label: "🚚 Shipping", value: "shipping" },
+                    { label: "💳 Fees", value: "fees" },
+                  ]}
+                  value={reason}
+                  onChange={(v) => updateParam("reason", v)}
+                  disabled={isNavigating}
+                />
               </InlineGrid>
+
+              {/* Active reason filter context label */}
+              {reason !== "all" && (
+                <InlineStack gap="200" blockAlign="center">
+                  <Text variant="bodySm" as="p" tone="caution" fontWeight="semibold">
+                    {`Showing: orders where ${reasonLabels[reason] ?? reason} is top cost driver`}
+                  </Text>
+                  <Button
+                    size="slim"
+                    variant="plain"
+                    onClick={() => updateParam("reason", "all")}
+                  >
+                    Clear
+                  </Button>
+                </InlineStack>
+              )}
+
               {isNavigating && (
                 <Text variant="bodySm" as="p" tone="subdued">Updating data…</Text>
               )}
@@ -777,29 +1134,38 @@ export default function OrdersPage() {
               <Card padding="0">
                 {orders.length === 0 ? (
                   <EmptyState
-                    heading="No orders match your filters"
+                    heading={
+                      reason !== "all"
+                        ? `No orders where ${reasonLabels[reason] ?? reason} is top cost`
+                        : "No orders match your filters"
+                    }
                     image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                   >
                     <p>Try adjusting the date range or filters above.</p>
                   </EmptyState>
                 ) : (
                   <BlockStack gap="0">
-                    {/* Fix 5: sort toggle */}
+                    {/* Sort toggle */}
                     <Box padding="300" borderBlockEndWidth="025" borderColor="border">
                       <InlineStack align="space-between" blockAlign="center">
                         <Text variant="bodySm" as="p" tone="subdued">
-                          {sortMode === "loss" ? "Sorted by worst first" : "Sorted by date (newest first)"}
+                          {sortMode === "loss"
+                            ? "Sorted by worst first"
+                            : "Sorted by date (newest first)"}
                         </Text>
                         <Button
                           size="slim"
                           variant={sortMode === "loss" ? "primary" : "plain"}
-                          onClick={() => setSortMode((s) => s === "loss" ? "default" : "loss")}
+                          onClick={() =>
+                            setSortMode((s) => s === "loss" ? "default" : "loss")
+                          }
                         >
                           {sortMode === "loss" ? "Reset order" : "Show worst first"}
                         </Button>
                       </InlineStack>
                     </Box>
-                    {/* Row highlighting via injected CSS — Polaris DataTable has no rowBackground prop */}
+
+                    {/* Row highlighting via injected CSS */}
                     <style>{`
                       ${displayOrders.map((o, i) =>
                         !o.cogsComplete
@@ -809,18 +1175,26 @@ export default function OrdersPage() {
                           : ""
                       ).join("\n")}
                     `}</style>
+
                     <DataTable
                       columnContentTypes={[
                         "text", "text", "numeric", "numeric", "numeric",
-                        "numeric", "numeric", "numeric", "numeric", "text", "text",
+                        "numeric", "numeric", "numeric", "numeric",
+                        "text", "text", "text", // margin, top cost, action
                       ]}
                       headings={[
                         "Order", "Date", "Revenue", "Discounts", "COGS",
-                        "Fees", "Shipping", "Ad Spend", "Net Profit", "Margin", "Status",
+                        "Fees", "Shipping", "Ad Spend", "Net Profit",
+                        "Margin", "Top Cost", "Action",
                       ]}
                       rows={rows}
                     />
-                    <Box padding="400" borderBlockStartWidth="025" borderColor="border">
+
+                    <Box
+                      padding="400"
+                      borderBlockStartWidth="025"
+                      borderColor="border"
+                    >
                       <InlineStack align="space-between" blockAlign="center">
                         <BlockStack gap="0">
                           <Text variant="bodySm" as="p" tone="subdued">

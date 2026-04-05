@@ -12,28 +12,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log(`[GDPR] shop/redact received for ${shop}. Deleting all shop data.`);
 
   try {
-    // We gebruiken een transactie om te zorgen dat het 'alles of niets' is. 
-    // Faalt er één, dan worden ze allemaal ongedaan gemaakt (rollback).
+    // Transaction ensures all-or-nothing deletion.
+    // Order matters: delete children before parents to avoid FK constraint errors.
     await db.$transaction([
-      db.alert.deleteMany({ where: { shop } }),
+      // Order line items first (child of orders)
       db.orderLineItem.deleteMany({ where: { order: { shop } } }),
+      // Orders
       db.order.deleteMany({ where: { shop } }),
+      // Product variants first (child of products)
       db.productVariant.deleteMany({ where: { product: { shop } } }),
+      // Products
       db.product.deleteMany({ where: { shop } }),
+      // Settings
       db.shopSettings.deleteMany({ where: { shop } }),
-      db.session.deleteMany({ where: { shop } }),
-      
-      // De ontbrekende tabellen uit je andere routes:
-      db.expense.deleteMany({ where: { shop } }),
-      db.adIntegration.deleteMany({ where: { shop } }),
+      // Ad data
       db.adSpend.deleteMany({ where: { shop } }),
-      
-      // En als allerlaatste de shop zelf verwijderen
-      db.shop.deleteMany({ where: { shop } }),
+      db.adIntegration.deleteMany({ where: { shop } }),
+      // Expenses
+      db.expense.deleteMany({ where: { shop } }),
+      // Sessions — always last so auth stays valid during deletion
+      db.session.deleteMany({ where: { shop } }),
     ]);
 
     console.log(`[GDPR] shop/redact complete for ${shop}`);
   } catch (err) {
+    // Log the error but still return 200 — Shopify will retry on non-200,
+    // which could cause issues if partial deletion already occurred.
+    // Investigate any errors in Railway logs.
     console.error(`[GDPR] shop/redact error for ${shop}:`, err);
   }
 

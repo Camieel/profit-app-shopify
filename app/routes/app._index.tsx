@@ -1,11 +1,12 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useSubmit, useNavigation, useNavigate } from "react-router";
+import { useLoaderData, useSubmit, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { useState, useEffect, useCallback } from "react";
 import {
   Page, Layout, Card, Text, Badge, Box, BlockStack, InlineStack,
   Button, Banner, ResourceList, ResourceItem, EmptyState, Modal,
   Checkbox, DataTable, SkeletonPage, SkeletonBodyText, SkeletonDisplayText, InlineGrid,
+  TextField,
 } from "@shopify/polaris";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -19,13 +20,18 @@ import { toMonthly } from "./app.expenses";
 const ALL_CARDS = [
   { id: "action_center", label: "Action Center" },
   { id: "kpi_strip", label: "Key Metrics" },
+  { id: "revenue_allocation", label: "Revenue Allocation" },
+  { id: "product_leaderboard", label: "Product Leaderboard" },
   { id: "chart", label: "Profit Stability Chart" },
   { id: "priority_orders", label: "Priority Orders" },
   { id: "held_orders", label: "Held Orders" },
 ] as const;
 
 type CardId = (typeof ALL_CARDS)[number]["id"];
-const DEFAULT_CARDS: CardId[] = ["action_center", "kpi_strip", "chart", "priority_orders", "held_orders"];
+const DEFAULT_CARDS: CardId[] = [
+  "action_center", "kpi_strip", "revenue_allocation",
+  "product_leaderboard", "chart", "priority_orders", "held_orders",
+];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type LossReason =
@@ -120,7 +126,7 @@ interface PriorityOrder {
   financialStatus: string | null;
   currency: string;
   topCostReason: string;
-  repeatLossCount: number; // how many times this top cost reason appeared in losses this period
+  repeatLossCount: number;
 }
 
 interface HeldOrder {
@@ -134,9 +140,40 @@ interface HeldOrder {
   currency: string;
 }
 
+// New: revenue allocation
+interface RevenueAllocation {
+  revenue: number;
+  cogs: number;
+  adSpend: number;
+  shipping: number;
+  fees: number;
+  expenses: number;
+  profit: number;
+}
+
+// New: product leaderboard entry
+interface ProductStat {
+  title: string;
+  profit: number;
+  unitsSold: number;
+}
+
+// New: extended KPIs
+interface ExtendedKpis {
+  unitsSold: number;
+  avgOrderValue: number;
+  avgOrderProfit: number;
+  totalCogs: number;
+  totalShipping: number;
+  totalFees: number;
+}
+
 interface LoaderData {
   actionCenter: ActionCenterState;
   kpiMetrics: KpiMetric[];
+  extendedKpis: ExtendedKpis;
+  revenueAllocation: RevenueAllocation;
+  productLeaderboard: { top: ProductStat[]; leaks: ProductStat[] };
   chartData: ChartPoint[];
   priorityOrders: PriorityOrder[];
   heldOrders: HeldOrder[];
@@ -146,9 +183,13 @@ interface LoaderData {
   visibleCards: CardId[];
   hasOrders: boolean;
   shop: string;
+  dateFrom: string;
+  dateTo: string;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Server helpers ────────────────────────────────────────────────────────────
+function toDateStr(d: Date) { return d.toISOString().split("T")[0]; }
+
 function fmtCurrency(amount: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
     style: "currency", currency, minimumFractionDigits: 2,
@@ -182,7 +223,7 @@ function analyzeLossReasons(
     cogs: number;
     shippingCost: number;
     transactionFee: number;
-    totalDiscounts: number; // edge case: discounts can be root cause
+    totalDiscounts: number;
   }>,
   lineItemsByOrder: Map<string, Array<{
     productId: string;
@@ -195,8 +236,6 @@ function analyzeLossReasons(
   const lossOrders = orders.filter((o) => o.netProfit < 0);
   if (lossOrders.length === 0) return null;
 
-  // Fix 1: proportional attribution — each cost's share of the actual loss
-  // Discounts included: they reduce revenue, making them a root cause of losses
   const breakdown = { ads: 0, cogs: 0, shipping: 0, fees: 0, discounts: 0 };
 
   for (const o of lossOrders) {
@@ -219,11 +258,8 @@ function analyzeLossReasons(
   const entries = Object.entries(breakdown) as [keyof typeof breakdown, number][];
   const [topSource, topSourceAmount] = entries.reduce((max, cur) => cur[1] > max[1] ? cur : max);
   const topSourcePercent = Math.round((topSourceAmount / total) * 100);
-
-  // Fix 2: dominance detection
   const isDominant = topSourcePercent > 50;
 
-  // Fix 1 + 3: product loss aligned with root cause using variantId as stable key
   const productLossMap = new Map<string, {
     title: string;
     loss: number;
@@ -233,8 +269,6 @@ function analyzeLossReasons(
   for (const o of lossOrders) {
     const items = lineItemsByOrder.get(o.id) ?? [];
     const totalItemQuantity = items.reduce((s, i) => s + i.quantity, 0) || 1;
-
-    // Distribute extra costs per item unit proportionally
     const adsPerUnit = (o.adSpendAllocated ?? 0) / totalItemQuantity;
     const shippingPerUnit = (o.shippingCost ?? 0) / totalItemQuantity;
     const feesPerUnit = (o.transactionFee ?? 0) / totalItemQuantity;
@@ -242,9 +276,7 @@ function analyzeLossReasons(
     for (const item of items) {
       const revenue = item.price * item.quantity;
       const extraCosts = (adsPerUnit + shippingPerUnit + feesPerUnit) * item.quantity;
-      // Fix 1: item profit includes proportional share of all order-level costs
       const itemProfit = revenue - item.cogs - extraCosts;
-
       const existing = productLossMap.get(item.productId);
       const itemCostBreakdown = {
         ads: adsPerUnit * item.quantity,
@@ -252,7 +284,6 @@ function analyzeLossReasons(
         shipping: shippingPerUnit * item.quantity,
         fees: feesPerUnit * item.quantity,
       };
-
       if (existing) {
         existing.loss += itemProfit;
         existing.costBreakdown.ads += itemCostBreakdown.ads;
@@ -272,7 +303,6 @@ function analyzeLossReasons(
   const lossProducts = [...productLossMap.entries()]
     .filter(([, v]) => v.loss < 0)
     .sort((a, b) => a[1].loss - b[1].loss);
-
   const totalProductLoss = lossProducts.reduce((s, [, v]) => s + Math.abs(v.loss), 0);
   let topProduct: TopLossProduct | null = null;
 
@@ -280,27 +310,18 @@ function analyzeLossReasons(
     const [pid, pdata] = lossProducts[0];
     const productLossAmount = Math.abs(pdata.loss);
     const pct = totalProductLoss > 0 ? Math.round((productLossAmount / totalProductLoss) * 100) : 0;
-
-    // Fix 2: find this product's top cost source — merging both brains
     const pBreakdown = pdata.costBreakdown;
     const pEntries = Object.entries(pBreakdown) as ["ads" | "cogs" | "shipping" | "fees", number][];
     const pTotal = pEntries.reduce((s, [, v]) => s + v, 0);
     const [pTopSource] = pEntries.reduce((max, cur) => cur[1] > max[1] ? cur : max);
     const pTopPct = pTotal > 0 ? Math.round((pBreakdown[pTopSource] / pTotal) * 100) : 0;
-
     topProduct = {
-      productId: pid,
-      title: pdata.title,
-      totalLoss: productLossAmount,
-      percentOfTotalLoss: pct,
-      topCostSource: pTopSource,
-      topCostSourcePercent: pTopPct,
+      productId: pid, title: pdata.title, totalLoss: productLossAmount,
+      percentOfTotalLoss: pct, topCostSource: pTopSource, topCostSourcePercent: pTopPct,
     };
   }
 
-  return {
-    ...breakdown, total, topSource, topSourcePercent, topSourceAmount, isDominant, topProduct,
-  };
+  return { ...breakdown, total, topSource, topSourcePercent, topSourceAmount, isDominant, topProduct };
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────────
@@ -308,17 +329,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const { shop } = session;
 
+  const url = new URL(request.url);
   const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
-  const sixtyDaysAgo = new Date(now.getTime() - 60 * 86400000);
+
+  // Date range — affects main KPIs, chart, allocation, leaderboard
+  const defaultTo = toDateStr(now);
+  const defaultFrom = toDateStr(new Date(now.getTime() - 30 * 86400000));
+  const dateFrom = url.searchParams.get("from") || defaultFrom;
+  const dateTo = url.searchParams.get("to") || defaultTo;
+  const since = new Date(dateFrom + "T00:00:00.000Z");
+  const until = new Date(dateTo + "T23:59:59.999Z");
+
+  // Prev period (same length, immediately before)
+  const periodMs = until.getTime() - since.getTime();
+  const prevSince = new Date(since.getTime() - periodMs);
+  const prevUntil = new Date(since.getTime() - 1);
+
+  // Action Center always uses last 7 days (fixed — shows current issues)
   const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
 
   const [
-    orders30d, ordersPrev30d, orders7d, heldOrders,
+    ordersInRange, ordersPrev, orders7d, heldOrders,
     missingCogsVariants, settings, expenses, totalOrderCount,
+    lineItemsInRange,
   ] = await Promise.all([
     db.order.findMany({
-      where: { shop, shopifyCreatedAt: { gte: thirtyDaysAgo } },
+      where: { shop, shopifyCreatedAt: { gte: since, lte: until } },
       select: {
         id: true, shopifyOrderId: true, shopifyOrderName: true,
         totalPrice: true, netProfit: true, marginPercent: true,
@@ -328,17 +364,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     }),
     db.order.aggregate({
-      where: { shop, shopifyCreatedAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
+      where: { shop, shopifyCreatedAt: { gte: prevSince, lte: prevUntil } },
       _sum: { totalPrice: true, netProfit: true },
       _avg: { marginPercent: true },
       _count: { id: true },
     }),
-    // Fix 5: id now included in select
     db.order.findMany({
       where: { shop, shopifyCreatedAt: { gte: sevenDaysAgo } },
       select: {
-        id: true,
-        netProfit: true, marginPercent: true, isHeld: true,
+        id: true, netProfit: true, marginPercent: true, isHeld: true,
         adSpendAllocated: true, cogs: true, shippingCost: true,
         transactionFee: true, totalPrice: true, totalDiscounts: true,
       },
@@ -360,28 +394,76 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     db.shopSettings.findUnique({ where: { shop } }),
     db.expense?.findMany({ where: { shop, isActive: true } }).catch(() => []),
     db.order.count({ where: { shop } }),
+    // New: line items for product leaderboard
+    db.orderLineItem.findMany({
+      where: { order: { shop, shopifyCreatedAt: { gte: since, lte: until } } },
+      select: {
+        productTitle: true,
+        price: true, quantity: true, cogs: true,
+      },
+    }),
   ]);
 
   const alertMarginThreshold = settings?.alertMarginThreshold ?? 10;
 
-  // ── Expenses ──────────────────────────────────────────────────────────────────
   const monthlyExpenses = (expenses ?? []).reduce(
     (s: number, e: { amount: number; interval: string }) => s + toMonthly(e.amount, e.interval), 0
   );
 
-  // ── Core metrics ──────────────────────────────────────────────────────────────
-  const totalRevenue30d = orders30d.reduce((s, o) => s + o.totalPrice, 0);
-  const totalNetProfit30d = orders30d.reduce((s, o) => s + o.netProfit, 0) - monthlyExpenses;
-  const avgMargin30d = orders30d.length > 0
-    ? orders30d.reduce((s, o) => s + o.marginPercent, 0) / orders30d.length : 0;
-  const totalAdSpend30d = orders30d.reduce((s, o) => s + (o.adSpendAllocated ?? 0), 0);
+  // ── Core metrics ──────────────────────────────────────────────────────────
+  const totalRevenue = ordersInRange.reduce((s, o) => s + o.totalPrice, 0);
+  const totalNetProfit = ordersInRange.reduce((s, o) => s + o.netProfit, 0) - monthlyExpenses;
+  const totalCogs = ordersInRange.reduce((s, o) => s + o.cogs, 0);
+  const totalAdSpend = ordersInRange.reduce((s, o) => s + (o.adSpendAllocated ?? 0), 0);
+  const totalShipping = ordersInRange.reduce((s, o) => s + o.shippingCost, 0);
+  const totalFees = ordersInRange.reduce((s, o) => s + o.transactionFee, 0);
+  const avgMargin = ordersInRange.length > 0
+    ? ordersInRange.reduce((s, o) => s + o.marginPercent, 0) / ordersInRange.length : 0;
 
-  const prevRevenue = ordersPrev30d._sum.totalPrice ?? 0;
-  const prevProfit = (ordersPrev30d._sum.netProfit ?? 0) - monthlyExpenses;
-  const prevMargin = ordersPrev30d._avg.marginPercent ?? 0;
-  const prevCount = ordersPrev30d._count.id ?? 0;
+  // Extended KPIs
+  const unitsSold = lineItemsInRange.reduce((s, i) => s + i.quantity, 0);
+  const avgOrderValue = ordersInRange.length > 0 ? totalRevenue / ordersInRange.length : 0;
+  const avgOrderProfit = ordersInRange.length > 0 ? totalNetProfit / ordersInRange.length : 0;
 
-  // ── 7-day analysis ────────────────────────────────────────────────────────────
+  // Previous period
+  const prevRevenue = ordersPrev._sum.totalPrice ?? 0;
+  const prevProfit = (ordersPrev._sum.netProfit ?? 0) - monthlyExpenses;
+  const prevMargin = ordersPrev._avg.marginPercent ?? 0;
+  const prevCount = ordersPrev._count.id ?? 0;
+
+  // ── Revenue allocation ────────────────────────────────────────────────────
+  const revenueAllocation: RevenueAllocation = {
+    revenue: totalRevenue,
+    cogs: totalCogs,
+    adSpend: totalAdSpend,
+    shipping: totalShipping,
+    fees: totalFees,
+    expenses: monthlyExpenses,
+    profit: Math.max(0, totalNetProfit), // only show positive profit in bar
+  };
+
+  // ── Product leaderboard ───────────────────────────────────────────────────
+  // Aggregate line items by product title (gross contribution: revenue - cogs)
+  const productMap = new Map<string, { profit: number; unitsSold: number }>();
+  for (const item of lineItemsInRange) {
+    const key = item.productTitle || "Unknown product";
+    const gross = item.price * item.quantity - item.cogs;
+    const existing = productMap.get(key) ?? { profit: 0, unitsSold: 0 };
+    productMap.set(key, {
+      profit: existing.profit + gross,
+      unitsSold: existing.unitsSold + item.quantity,
+    });
+  }
+  const allProducts: ProductStat[] = [...productMap.entries()].map(([title, v]) => ({
+    title, ...v,
+  }));
+  const topProducts = [...allProducts].sort((a, b) => b.profit - a.profit).slice(0, 3);
+  const leakProducts = [...allProducts]
+    .filter((p) => p.profit < 0)
+    .sort((a, b) => a.profit - b.profit)
+    .slice(0, 3);
+
+  // ── 7-day analysis for Action Center (always fixed) ───────────────────────
   const lossOrders7d = orders7d.filter((o) => o.netProfit < 0);
   const lossAmount7d = lossOrders7d.reduce((s, o) => s + Math.abs(o.netProfit), 0);
   const maxSingleLoss = lossOrders7d.length > 0
@@ -389,9 +471,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const avgMargin7d = orders7d.length > 0
     ? orders7d.reduce((s, o) => s + o.marginPercent, 0) / orders7d.length : 0;
   const profit7d = orders7d.reduce((s, o) => s + o.netProfit, 0);
-  const lossPercent7d = orders7d.length > 0 ? (lossOrders7d.length / orders7d.length) * 100 : 0;
+  const lossPercent7d = orders7d.length > 0
+    ? (lossOrders7d.length / orders7d.length) * 100 : 0;
 
-  // Fix 3: use variantId as stable product key, fetch line items
   const lossOrderIds7d = lossOrders7d.map((o) => o.id).filter(Boolean);
   const lossLineItemsRaw = lossOrderIds7d.length > 0
     ? await db.orderLineItem.findMany({
@@ -403,39 +485,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       })
     : [];
 
-  // Fix 3: use shopifyVariantId as stable key (not productTitle)
   const lineItemsByOrder = new Map<string, Array<{
     productId: string; productTitle: string;
     cogs: number; price: number; quantity: number;
   }>>();
-
   for (const item of lossLineItemsRaw) {
     const productId = item.shopifyVariantId ?? item.productTitle;
     const existing = lineItemsByOrder.get(item.orderId) ?? [];
     existing.push({
-      productId,
-      productTitle: item.productTitle,
-      cogs: item.cogs,
-      price: item.price,
-      quantity: item.quantity,
+      productId, productTitle: item.productTitle,
+      cogs: item.cogs, price: item.price, quantity: item.quantity,
     });
     lineItemsByOrder.set(item.orderId, existing);
   }
 
-  // ── Root cause analysis ───────────────────────────────────────────────────────
   const lossBreakdown = analyzeLossReasons(lossOrders7d, lineItemsByOrder);
 
-  // ── Scoring engine (non-linear) ───────────────────────────────────────────────
+  // ── Scoring engine ────────────────────────────────────────────────────────
   const actionItems: ActionItem[] = [];
 
   if (lossOrders7d.length > 0 && lossBreakdown) {
     const { topSource, topSourcePercent, isDominant, topProduct } = lossBreakdown;
-
     const bigLossPenalty = maxSingleLoss > 200 ? 300 : maxSingleLoss > 100 ? 200 : maxSingleLoss > 50 ? 100 : 0;
     const score = Math.pow(lossAmount7d, 1.2) * 0.6 + lossOrders7d.length * 30 * 0.3 + 100 * 0.1 + bigLossPenalty;
 
     const sourceLabels: Record<string, string> = {
-      ads: "Ad spend", cogs: "Product costs", shipping: "Shipping costs", fees: "Transaction fees", discounts: "Discounts",
+      ads: "Ad spend", cogs: "Product costs", shipping: "Shipping costs",
+      fees: "Transaction fees", discounts: "Discounts",
     };
     const filterUrls: Record<string, string> = {
       ads: "/app/orders?profitability=loss&reason=ads",
@@ -458,8 +534,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
 
     const unheld = lossOrders7d.filter((o) => !o.isHeld).length;
-
-    // Fix 2 + 4: title merges both brains, severity driven by product dominance
     let title: string;
     let actionType: LossReason;
     let itemSeverity: "critical" | "warning" = "critical";
@@ -468,17 +542,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     if (topProduct && topProduct.percentOfTotalLoss >= 40) {
       const costSourceNames: Record<string, string> = {
-        ads: "ads", cogs: "product cost", shipping: "shipping", fees: "fees", discounts: "discounts",
+        ads: "ads", cogs: "product cost", shipping: "shipping",
+        fees: "fees", discounts: "discounts",
       };
       title = topProduct.topCostSourcePercent >= 50
         ? `"${topProduct.title}" is losing money mainly due to ${costSourceNames[topProduct.topCostSource]} (${topProduct.topCostSourcePercent}%)`
         : `"${topProduct.title}" caused ${topProduct.percentOfTotalLoss}% of your losses this week`;
-
       itemSeverity = topProduct.percentOfTotalLoss > 60 ? "critical" : "warning";
       itemTimeToFix = "2 min";
       actionType = typeMap[topProduct.topCostSource] ?? "loss_due_to_ads";
-
-      // Context-aware action labels based on root cause
       if (topProduct.topCostSource === "cogs") {
         itemActions.push(
           { label: "Update cost price", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true },
@@ -517,23 +589,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     const cogsAdvice = topProduct?.topCostSource === "cogs"
-      ? ` Update the cost price in ClearProfit or raise the selling price in Shopify to break even.`
-      : "";
+      ? ` Update the cost price in ClearProfit or raise the selling price in Shopify to break even.` : "";
     const description = `${lossOrders7d.length} order${lossOrders7d.length > 1 ? "s" : ""} unprofitable${unheld > 0 ? ` · ${unheld} shipped without being held` : ""}. ${isDominant ? sourceAdvice[topSource] : "Review your pricing, COGS, and ad spend together."}${cogsAdvice}`;
-
-    // Fix 6: potential recovery
     const potentialRecovery = topProduct ? topProduct.totalLoss : lossAmount7d;
 
     actionItems.push({
-      type: actionType,
-      severity: itemSeverity,
+      type: actionType, severity: itemSeverity,
       confidence: lossOrders7d.length >= 3 ? "high" : "medium",
-      score,
-      title,
-      description,
+      score, title, description,
       impact: `Total loss: ${fmtK(lossAmount7d)}${topProduct ? ` · "${topProduct.title}": ${fmtK(topProduct.totalLoss)}` : ""}`,
-      potentialRecovery,
-      timeToFix: itemTimeToFix,
+      potentialRecovery, timeToFix: itemTimeToFix,
       filterUrl: filterUrls[topSource] ?? "/app/orders?profitability=loss",
       actions: itemActions,
     });
@@ -543,16 +608,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const gap = alertMarginThreshold - avgMargin7d;
     const score = Math.pow(gap * 20, 1.1) * 0.6 + orders7d.length * 5 * 0.3 + 50 * 0.1;
     actionItems.push({
-      type: "low_margin",
-      severity: "warning",
-      confidence: orders7d.length >= 5 ? "high" : "medium",
-      score,
+      type: "low_margin", severity: "warning",
+      confidence: orders7d.length >= 5 ? "high" : "medium", score,
       title: `Margins are ${gap.toFixed(1)}% below target`,
       description: `Avg margin this week: ${avgMargin7d.toFixed(1)}% — target is ${alertMarginThreshold}%+. Check product pricing or COGS.`,
       impact: `${gap.toFixed(1)}% gap — every order underperforms`,
-      potentialRecovery: null,
-      timeToFix: "10 min",
-      filterUrl: "/app/orders",
+      potentialRecovery: null, timeToFix: "10 min", filterUrl: "/app/orders",
       actions: [
         { label: "View products", url: "/app/products", primary: true },
         { label: "Check settings", url: "/app/settings" },
@@ -560,56 +621,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  if (totalAdSpend30d > 0 && totalRevenue30d > 0 && totalAdSpend30d / totalRevenue30d > 0.4) {
-    const excessSpend = totalAdSpend30d - totalRevenue30d * 0.3;
-    const score = Math.pow(excessSpend, 1.1) * 0.6 + orders30d.length * 2 * 0.3 + 30 * 0.1;
+  if (totalAdSpend > 0 && totalRevenue > 0 && totalAdSpend / totalRevenue > 0.4) {
+    const excessSpend = totalAdSpend - totalRevenue * 0.3;
+    const score = Math.pow(excessSpend, 1.1) * 0.6 + ordersInRange.length * 2 * 0.3 + 30 * 0.1;
     actionItems.push({
-      type: "loss_due_to_ads",
-      severity: "warning",
-      confidence: "high",
-      score,
+      type: "loss_due_to_ads", severity: "warning", confidence: "high", score,
       title: "Ad spend is too high relative to revenue",
-      description: `Ad spend is ${((totalAdSpend30d / totalRevenue30d) * 100).toFixed(0)}% of revenue — healthy is below 30%.`,
+      description: `Ad spend is ${((totalAdSpend / totalRevenue) * 100).toFixed(0)}% of revenue — healthy is below 30%.`,
       impact: `Excess: ~${fmtK(excessSpend)}/month`,
-      potentialRecovery: excessSpend,
-      timeToFix: "5 min",
+      potentialRecovery: excessSpend, timeToFix: "5 min",
       filterUrl: "/app/orders?profitability=loss",
       actions: [{ label: "View ad breakdown", url: "/app/orders", primary: true }],
     });
   }
 
-  if (monthlyExpenses > totalRevenue30d * 0.2) {
-    const ratio = monthlyExpenses / Math.max(totalRevenue30d, 1);
+  if (monthlyExpenses > totalRevenue * 0.2) {
+    const ratio = monthlyExpenses / Math.max(totalRevenue, 1);
     const score = Math.pow(ratio * 100, 1.05) * 5;
     actionItems.push({
-      type: "high_expenses",
-      severity: "info",
-      confidence: "high",
-      score,
+      type: "high_expenses", severity: "info", confidence: "high", score,
       title: `Fixed costs: ${fmtK(monthlyExpenses)}/month`,
       description: `Your fixed expenses are ${(ratio * 100).toFixed(0)}% of monthly revenue.`,
       impact: `${(ratio * 100).toFixed(0)}% of revenue`,
-      potentialRecovery: null,
-      timeToFix: "5 min",
-      filterUrl: "/app/expenses",
+      potentialRecovery: null, timeToFix: "5 min", filterUrl: "/app/expenses",
       actions: [{ label: "Review expenses", url: "/app/expenses", primary: true }],
     });
   }
 
-  // Fix 2: Missing COGS as data health action item instead of standalone banner
   if (missingCogsVariants.length > 0) {
-    const cogsImpactCalc = orders30d.filter((o) => !o.cogsComplete).length *
-      (totalRevenue30d / Math.max(orders30d.length, 1)) * 0.15;
+    const cogsImpactCalc = ordersInRange.filter((o) => !o.cogsComplete).length *
+      (totalRevenue / Math.max(ordersInRange.length, 1)) * 0.15;
     actionItems.push({
-      type: "loss_mixed" as LossReason,
-      severity: "info",
-      confidence: "low",
+      type: "loss_mixed" as LossReason, severity: "info", confidence: "low",
       score: missingCogsVariants.length * 10,
       title: `Data health: ${missingCogsVariants.length} products missing cost data`,
       description: `Orders with missing COGS show inflated margins and may not trigger holds correctly.`,
       impact: `Profit may be overstated by ~${fmtK(cogsImpactCalc)}`,
-      potentialRecovery: null,
-      timeToFix: "2 min",
+      potentialRecovery: null, timeToFix: "2 min",
       filterUrl: "/app/products?filter=missing",
       actions: [{ label: "Fix now", url: "/app/products?filter=missing", primary: true }],
     });
@@ -617,7 +665,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const prioritizedItems = actionItems.sort((a, b) => b.score - a.score).slice(0, 3);
 
-  // ── State + hero insight ──────────────────────────────────────────────────────
   let acState: "critical" | "warning" | "healthy" = "healthy";
   if (prioritizedItems.some((i) => i.severity === "critical")) acState = "critical";
   else if (prioritizedItems.some((i) => i.severity === "warning")) acState = "warning";
@@ -630,7 +677,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ads: "Facebook/Google ads", cogs: "product costs",
       shipping: "shipping costs", fees: "transaction fees", discounts: "discounts",
     };
-    // Fix 2: combined hero insight with both product and cost source
     if (topProduct && topProduct.percentOfTotalLoss >= 40 && topProduct.topCostSourcePercent >= 50) {
       heroInsight = `"${topProduct.title}" is losing money mainly due to ${sourceNames[topProduct.topCostSource]} — ${fmtK(topProduct.totalLoss)} lost this week`;
     } else if (topProduct && topProduct.percentOfTotalLoss >= 40) {
@@ -647,49 +693,47 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const actionCenter: ActionCenterState = {
-    state: acState,
-    heroInsight,
-    items: prioritizedItems,
-    lossBreakdown,
+    state: acState, heroInsight, items: prioritizedItems, lossBreakdown,
     summary: {
       lossAmount: lossAmount7d, lossOrders: lossOrders7d.length,
       avgMargin: avgMargin7d, profit7d, lossPercent: lossPercent7d, maxSingleLoss,
     },
   };
 
-  // ── KPI metrics ───────────────────────────────────────────────────────────────
+  // ── KPI metrics ───────────────────────────────────────────────────────────
   const pctChange = (curr: number, prev: number) =>
     prev === 0 ? null : ((curr - prev) / Math.abs(prev)) * 100;
   const trendDir = (n: number | null): "up" | "down" | "neutral" =>
     n == null ? "neutral" : n >= 0 ? "up" : "down";
   const fmtPct = (n: number | null) =>
-    n == null ? "vs prev period" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}% vs prev 30d`;
+    n == null ? "vs prev period" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}% vs prev period`;
 
-  const profitPct = pctChange(totalNetProfit30d, prevProfit);
-  const revenuePct = pctChange(totalRevenue30d, prevRevenue);
-  const marginPct = pctChange(avgMargin30d, prevMargin);
-  const ordersPct = pctChange(orders30d.length, prevCount);
+  const profitPct = pctChange(totalNetProfit, prevProfit);
+  const revenuePct = pctChange(totalRevenue, prevRevenue);
+  const marginPct = pctChange(avgMargin, prevMargin);
+  const ordersPct = pctChange(ordersInRange.length, prevCount);
 
   const kpiMetrics: KpiMetric[] = [
-    { label: "Net Profit (30d)", value: fmtK(totalNetProfit30d), sub: fmtPct(profitPct), trend: trendDir(profitPct), trendPositive: (profitPct ?? 0) >= 0, highlighted: acState === "critical" && totalNetProfit30d < 0 },
-    { label: "Revenue (30d)", value: fmtK(totalRevenue30d), sub: fmtPct(revenuePct), trend: trendDir(revenuePct), trendPositive: (revenuePct ?? 0) >= 0, highlighted: false },
-    { label: "Avg Margin", value: avgMargin30d.toFixed(1) + "%", sub: fmtPct(marginPct), trend: trendDir(marginPct), trendPositive: (marginPct ?? 0) >= 0, highlighted: acState !== "healthy" && avgMargin30d < alertMarginThreshold },
-    { label: "Orders (30d)", value: String(orders30d.length), sub: fmtPct(ordersPct), trend: trendDir(ordersPct), trendPositive: (ordersPct ?? 0) >= 0, highlighted: false },
-    { label: "Ad Spend (30d)", value: fmtK(totalAdSpend30d), sub: totalRevenue30d > 0 ? `${((totalAdSpend30d / totalRevenue30d) * 100).toFixed(0)}% of revenue` : "No revenue", trend: "neutral", trendPositive: totalRevenue30d > 0 && totalAdSpend30d / totalRevenue30d < 0.4, highlighted: totalRevenue30d > 0 && totalAdSpend30d / totalRevenue30d > 0.4 },
-    { label: "Fixed Expenses", value: fmtK(monthlyExpenses), sub: "per month", trend: "neutral", trendPositive: true, highlighted: monthlyExpenses > totalRevenue30d * 0.2 },
+    { label: "Net Profit", value: fmtK(totalNetProfit), sub: fmtPct(profitPct), trend: trendDir(profitPct), trendPositive: (profitPct ?? 0) >= 0, highlighted: acState === "critical" && totalNetProfit < 0 },
+    { label: "Revenue", value: fmtK(totalRevenue), sub: fmtPct(revenuePct), trend: trendDir(revenuePct), trendPositive: (revenuePct ?? 0) >= 0, highlighted: false },
+    { label: "Avg Margin", value: avgMargin.toFixed(1) + "%", sub: fmtPct(marginPct), trend: trendDir(marginPct), trendPositive: (marginPct ?? 0) >= 0, highlighted: acState !== "healthy" && avgMargin < alertMarginThreshold },
+    { label: "Orders", value: String(ordersInRange.length), sub: fmtPct(ordersPct), trend: trendDir(ordersPct), trendPositive: (ordersPct ?? 0) >= 0, highlighted: false },
+    { label: "Ad Spend", value: fmtK(totalAdSpend), sub: totalRevenue > 0 ? `${((totalAdSpend / totalRevenue) * 100).toFixed(0)}% of revenue` : "No revenue", trend: "neutral", trendPositive: totalRevenue > 0 && totalAdSpend / totalRevenue < 0.4, highlighted: totalRevenue > 0 && totalAdSpend / totalRevenue > 0.4 },
+    { label: "Fixed Expenses", value: fmtK(monthlyExpenses), sub: "per month", trend: "neutral", trendPositive: true, highlighted: monthlyExpenses > totalRevenue * 0.2 },
   ];
 
-  // ── Chart data ────────────────────────────────────────────────────────────────
+  // ── Chart data ────────────────────────────────────────────────────────────
   const chartMap = new Map<string, { date: string; dateKey: string; profit: number; revenue: number; orderCount: number }>();
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400000);
-    const dateStr = d.toISOString().split("T")[0];
+  let d = new Date(since);
+  while (d <= until) {
+    const dateStr = toDateStr(d);
     chartMap.set(dateStr, {
       date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
       dateKey: dateStr, profit: 0, revenue: 0, orderCount: 0,
     });
+    d = new Date(d.getTime() + 86400000);
   }
-  for (const o of orders30d) {
+  for (const o of ordersInRange) {
     const dStr = o.shopifyCreatedAt.toISOString().split("T")[0];
     const entry = chartMap.get(dStr);
     if (entry) { entry.profit += o.netProfit; entry.revenue += o.totalPrice; entry.orderCount += 1; }
@@ -701,16 +745,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     isLoss: p.profit < 0,
   }));
 
-  // ── Priority orders ───────────────────────────────────────────────────────────
-  // Fix 4: count how many loss orders share the same top cost reason (repeat detection)
-  const lossOrders30d = orders30d.filter((o) => o.netProfit < 0);
+  // ── Priority orders ───────────────────────────────────────────────────────
+  const lossOrders30d = ordersInRange.filter((o) => o.netProfit < 0);
   const reasonCounts = new Map<string, number>();
   for (const o of lossOrders30d) {
     const reason = getTopCostReason(o);
     reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
   }
-
-  const priorityOrders: PriorityOrder[] = [...orders30d]
+  const priorityOrders: PriorityOrder[] = [...ordersInRange]
     .sort((a, b) => a.netProfit - b.netProfit)
     .slice(0, 8)
     .map((o) => {
@@ -719,8 +761,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         id: o.id, shopifyOrderId: o.shopifyOrderId, shopifyOrderName: o.shopifyOrderName,
         netProfit: o.netProfit, marginPercent: o.marginPercent, isHeld: o.isHeld,
         cogsComplete: o.cogsComplete, financialStatus: o.financialStatus, currency: o.currency,
-        topCostReason,
-        repeatLossCount: reasonCounts.get(topCostReason) ?? 0,
+        topCostReason, repeatLossCount: reasonCounts.get(topCostReason) ?? 0,
       };
     });
 
@@ -729,8 +770,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .reduce((s, o) => s + Math.abs(o.netProfit), 0);
 
   const missingCogsCount = missingCogsVariants.length;
-  const ordersWithMissingCogs = orders30d.filter((o) => !o.cogsComplete).length;
-  const avgOrderRevenue = totalRevenue30d / Math.max(orders30d.length, 1);
+  const ordersWithMissingCogs = ordersInRange.filter((o) => !o.cogsComplete).length;
+  const avgOrderRevenue = totalRevenue / Math.max(ordersInRange.length, 1);
   const missingCogsImpact = ordersWithMissingCogs * avgOrderRevenue * 0.15;
 
   let visibleCards: CardId[] = DEFAULT_CARDS;
@@ -739,14 +780,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   return json({
-    actionCenter, kpiMetrics, chartData, priorityOrders,
+    actionCenter, kpiMetrics,
+    extendedKpis: { unitsSold, avgOrderValue, avgOrderProfit, totalCogs, totalShipping, totalFees },
+    revenueAllocation, productLeaderboard: { top: topProducts, leaks: leakProducts },
+    chartData, priorityOrders,
     heldOrders: heldOrders.map((o) => ({
       id: o.id, shopifyOrderName: o.shopifyOrderName, shopifyOrderId: o.shopifyOrderId,
       netProfit: o.netProfit, marginPercent: o.marginPercent, heldReason: o.heldReason,
       totalPrice: o.totalPrice, currency: o.currency,
     })),
     heldSavedAmount, missingCogsCount, missingCogsImpact, visibleCards,
-    hasOrders: totalOrderCount > 0, shop,
+    hasOrders: totalOrderCount > 0, shop, dateFrom, dateTo,
   });
 };
 
@@ -790,23 +834,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
-// ── sessionStorage dismiss hook (24h TTL) ─────────────────────────────────────
+// ── Hooks ─────────────────────────────────────────────────────────────────────
 const DISMISS_KEY = "cp_dismissed_actions";
 const DISMISS_TTL = 24 * 60 * 60 * 1000;
 
 function useDismissed() {
   const [dismissed, setDismissed] = useState<string[]>([]);
-
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(DISMISS_KEY);
       if (!raw) return;
       const parsed: { type: string; at: number }[] = JSON.parse(raw);
-      const active = parsed.filter((d) => Date.now() - d.at < DISMISS_TTL).map((d) => d.type);
-      setDismissed(active);
+      setDismissed(parsed.filter((d) => Date.now() - d.at < DISMISS_TTL).map((d) => d.type));
     } catch {}
   }, []);
-
   const snooze24h = useCallback((type: string) => {
     setDismissed((prev) => {
       const next = [...prev, type];
@@ -821,7 +862,6 @@ function useDismissed() {
       return next;
     });
   }, []);
-
   return { dismissed, snooze24h };
 }
 
@@ -833,7 +873,6 @@ function DashboardSkeleton() {
         <Layout.Section><Card><BlockStack gap="400"><SkeletonDisplayText size="small" /><SkeletonBodyText lines={3} /></BlockStack></Card></Layout.Section>
         <Layout.Section><Card><SkeletonBodyText lines={2} /></Card></Layout.Section>
         <Layout.Section><Card><SkeletonBodyText lines={8} /></Card></Layout.Section>
-        <Layout.Section><Card><SkeletonBodyText lines={6} /></Card></Layout.Section>
       </Layout>
     </SkeletonPage>
   );
@@ -845,17 +884,212 @@ const confidenceConfig: Record<Confidence, { text: string; color: string }> = {
   low: { text: "Low confidence — some data missing", color: "#6b7280" },
 };
 
-// ── Type icons for Action Center ─────────────────────────────────────────────
 const actionTypeIcons: Record<string, string> = {
-  loss_due_to_ads: "📢",
-  loss_due_to_cogs: "📦",
-  loss_due_to_shipping: "🚚",
-  loss_due_to_fees: "💳",
-  loss_mixed: "⚖️",
-  low_margin: "📉",
-  high_expenses: "🏢",
+  loss_due_to_ads: "📢", loss_due_to_cogs: "📦", loss_due_to_shipping: "🚚",
+  loss_due_to_fees: "💳", loss_mixed: "⚖️", low_margin: "📉", high_expenses: "🏢",
 };
 
+// ── Date presets ──────────────────────────────────────────────────────────────
+function DateRangePicker({ dateFrom, dateTo, onUpdate }: {
+  dateFrom: string;
+  dateTo: string;
+  onUpdate: (from: string, to: string) => void;
+}) {
+  const [from, setFrom] = useState(dateFrom);
+  const [to, setTo] = useState(dateTo);
+
+  const today = new Date();
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const presets = [
+    { label: "Today", from: fmt(today), to: fmt(today) },
+    { label: "Yesterday", from: fmt(new Date(today.getTime() - 86400000)), to: fmt(new Date(today.getTime() - 86400000)) },
+    { label: "7 days", from: fmt(new Date(today.getTime() - 7 * 86400000)), to: fmt(today) },
+    { label: "30 days", from: fmt(new Date(today.getTime() - 30 * 86400000)), to: fmt(today) },
+    { label: "This month", from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmt(today) },
+    { label: "Last month", from: fmt(new Date(today.getFullYear(), today.getMonth() - 1, 1)), to: fmt(new Date(today.getFullYear(), today.getMonth(), 0)) },
+  ];
+
+  const handlePreset = (p: { from: string; to: string }) => {
+    setFrom(p.from);
+    setTo(p.to);
+    onUpdate(p.from, p.to);
+  };
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack gap="200" wrap>
+          {presets.map((p) => {
+            const active = from === p.from && to === p.to;
+            return (
+              <Button
+                key={p.label}
+                size="slim"
+                variant={active ? "primary" : "plain"}
+                onClick={() => handlePreset(p)}
+              >
+                {p.label}
+              </Button>
+            );
+          })}
+        </InlineStack>
+        <InlineStack gap="300" blockAlign="end" wrap>
+          <TextField
+            label="From"
+            type="date"
+            value={from}
+            onChange={(v) => setFrom(v)}
+            autoComplete="off"
+          />
+          <TextField
+            label="To"
+            type="date"
+            value={to}
+            onChange={(v) => setTo(v)}
+            autoComplete="off"
+          />
+          <Button
+            variant="primary"
+            onClick={() => onUpdate(from, to)}
+            disabled={from === dateFrom && to === dateTo}
+          >
+            Apply
+          </Button>
+        </InlineStack>
+      </BlockStack>
+    </Card>
+  );
+}
+
+// ── Revenue allocation bar ────────────────────────────────────────────────────
+function RevenueAllocationBar({ allocation }: { allocation: RevenueAllocation }) {
+  const { revenue, cogs, adSpend, shipping, fees, expenses, profit } = allocation;
+  if (revenue === 0) return null;
+
+  const pct = (n: number) => Math.max(0, (n / revenue) * 100);
+  const segments = [
+    { label: "COGS", value: cogs, color: "#f97316", pct: pct(cogs) },
+    { label: "Ad Spend", value: adSpend, color: "#a855f7", pct: pct(adSpend) },
+    { label: "Shipping", value: shipping, color: "#3b82f6", pct: pct(shipping) },
+    { label: "Fees", value: fees, color: "#6b7280", pct: pct(fees) },
+    { label: "Expenses", value: expenses, color: "#ef4444", pct: pct(expenses) },
+    { label: "Cash in Pocket", value: profit, color: "#22c55e", pct: pct(profit) },
+  ].filter((s) => s.pct > 0.5); // hide negligible segments
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack align="space-between" blockAlign="center">
+          <Text variant="headingMd" as="h2">Revenue Allocation</Text>
+          <Text variant="bodySm" as="p" tone="subdued">
+            {`Total revenue: ${fmtCurrency(revenue)}`}
+          </Text>
+        </InlineStack>
+        <div style={{ height: "24px", borderRadius: "6px", overflow: "hidden", display: "flex", gap: "2px" }}>
+          {segments.map((s) => (
+            <div
+              key={s.label}
+              style={{ width: `${s.pct}%`, background: s.color, minWidth: s.pct > 1 ? undefined : "2px" }}
+              title={`${s.label}: ${s.pct.toFixed(1)}%`}
+            />
+          ))}
+        </div>
+        <InlineStack gap="400" wrap>
+          {segments.map((s) => (
+            <InlineStack key={s.label} gap="100" blockAlign="center">
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+              <Text variant="bodySm" as="span" tone="subdued">
+                {`${s.label} ${s.pct.toFixed(1)}%`}
+              </Text>
+            </InlineStack>
+          ))}
+        </InlineStack>
+      </BlockStack>
+    </Card>
+  );
+}
+
+// ── Product leaderboard ───────────────────────────────────────────────────────
+function ProductLeaderboard({ top, leaks }: { top: ProductStat[]; leaks: ProductStat[] }) {
+  const hasData = top.length > 0 || leaks.length > 0;
+  if (!hasData) return null;
+
+  return (
+    <Card padding="0">
+      <Box padding="400" borderBlockEndWidth="025" borderColor="border">
+        <InlineStack align="space-between" blockAlign="center">
+          <Text variant="headingMd" as="h2">Performance Leaderboard</Text>
+          <Text variant="bodySm" as="p" tone="subdued">Gross contribution per product</Text>
+        </InlineStack>
+      </Box>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr" }}>
+        {/* Top performers */}
+        <div style={{ padding: "16px 20px" }}>
+          <Text variant="bodySm" as="p" tone="subdued" fontWeight="semibold">
+            TOP PERFORMING
+          </Text>
+          <div style={{ marginTop: "12px" }}>
+            <BlockStack gap="200">
+            {top.length === 0 ? (
+              <Text variant="bodySm" as="p" tone="subdued">No data yet</Text>
+            ) : top.map((p, i) => (
+              <InlineStack key={p.title} align="space-between" blockAlign="center">
+                <InlineStack gap="200" blockAlign="center">
+                  <div style={{
+                    width: 24, height: 24, borderRadius: "50%",
+                    background: "#f0fdf8", border: "1px solid #b3e8d8",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "11px", fontWeight: 700, color: "#008060", flexShrink: 0,
+                  }}>
+                    {i + 1}
+                  </div>
+                  <div style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <Text variant="bodySm" as="span">{p.title}</Text>
+                  </div>
+                </InlineStack>
+                <Text variant="bodySm" as="span" tone="success" fontWeight="semibold">
+                  {`+${fmtCurrency(p.profit)}`}
+                </Text>
+              </InlineStack>
+            ))}
+            </BlockStack>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div style={{ background: "#e5e7eb" }} />
+
+        {/* Profit leaks */}
+        <div style={{ padding: "16px 20px" }}>
+          <Text variant="bodySm" as="p" tone="subdued" fontWeight="semibold">
+            PROFIT LEAKS
+          </Text>
+          <div style={{ marginTop: "12px" }}>
+            <BlockStack gap="200">
+            {leaks.length === 0 ? (
+              <Text variant="bodySm" as="p" tone="success">No loss-making products 🎉</Text>
+            ) : leaks.map((p) => (
+              <InlineStack key={p.title} align="space-between" blockAlign="center">
+                <InlineStack gap="200" blockAlign="center">
+                  <span style={{ fontSize: "14px" }}>⚠️</span>
+                  <div style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <Text variant="bodySm" as="span">{p.title}</Text>
+                  </div>
+                </InlineStack>
+                <Text variant="bodySm" as="span" tone="critical" fontWeight="semibold">
+                  {fmtCurrency(p.profit)}
+                </Text>
+              </InlineStack>
+            ))}
+            </BlockStack>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ── Action Center ─────────────────────────────────────────────────────────────
 function ActionCenter({ actionCenter, missingCogsCount }: {
   actionCenter: ActionCenterState;
   missingCogsCount: number;
@@ -871,7 +1105,6 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
 
   return (
     <div style={{ border: `1px solid ${borderColor}`, borderRadius: "12px", overflow: "hidden" }}>
-      {/* Hero header */}
       <div style={{ background: headerBg, padding: "20px 24px", borderBottom: visibleItems.length > 0 ? `1px solid ${borderColor}` : undefined }}>
         <InlineStack align="space-between" blockAlign="center">
           <InlineStack gap="300" blockAlign="center">
@@ -890,7 +1123,6 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
           </Badge>
         </InlineStack>
 
-        {/* Loss breakdown bar with proportional attribution */}
         {lossBreakdown && state === "critical" && (
           <div style={{ marginTop: "16px" }}>
             <Text variant="bodySm" as="p" tone="subdued" fontWeight="semibold">
@@ -931,13 +1163,11 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
         )}
       </div>
 
-      {/* Action items */}
       {visibleItems.length > 0 && (
         <div style={{ background: "#ffffff" }}>
           {visibleItems.map((item, i) => {
             const conf = confidenceConfig[item.confidence];
             const typeIcon = actionTypeIcons[item.type] ?? "•";
-            const accentColor = item.severity === "critical" ? "#d92d20" : item.severity === "warning" ? "#b54708" : "#6b7280";
             return (
               <div
                 key={item.type}
@@ -945,12 +1175,10 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
               >
                 <InlineStack align="space-between" blockAlign="start" gap="400">
                   <InlineStack gap="300" blockAlign="start">
-                    {/* Fix 1: type icon with accent color */}
                     <div style={{
                       width: 36, height: 36, borderRadius: "8px", flexShrink: 0,
                       background: item.severity === "critical" ? "#fff1f0" : item.severity === "warning" ? "#fffbe6" : "#f5f5f5",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: "18px",
+                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px",
                     }}>
                       {typeIcon}
                     </div>
@@ -975,7 +1203,6 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
                       </InlineStack>
                     </BlockStack>
                   </InlineStack>
-                  {/* Fix 1: primary action visually dominant, snooze visually muted */}
                   <BlockStack gap="100">
                     {item.actions.filter((a) => a.primary).map((a) => (
                       <Button key={a.label} variant="primary" size="slim" onClick={() => navigate(a.url)}>
@@ -1001,43 +1228,89 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
   );
 }
 
-function KpiStrip({ metrics }: { metrics: KpiMetric[] }) {
+// ── KPI strip ─────────────────────────────────────────────────────────────────
+function KpiStrip({ metrics, extended }: { metrics: KpiMetric[]; extended: ExtendedKpis }) {
+  const [showExtended, setShowExtended] = useState(false);
+
+  const extraMetrics = [
+    { label: "Units Sold", value: String(extended.unitsSold), sub: "in period", critical: false },
+    { label: "Avg Order Value", value: fmtCurrency(extended.avgOrderValue), sub: "per order", critical: false },
+    { label: "Avg Order Profit", value: fmtCurrency(extended.avgOrderProfit), sub: "per order", critical: extended.avgOrderProfit < 0 },
+    { label: "Total COGS", value: fmtCurrency(extended.totalCogs), sub: "cost of goods", critical: false },
+    { label: "Shipping Costs", value: fmtCurrency(extended.totalShipping), sub: "carrier costs", critical: false },
+    { label: "Transaction Fees", value: fmtCurrency(extended.totalFees), sub: "payment fees", critical: false },
+  ];
+
   return (
     <Card>
-      <div style={{ display: "flex", overflowX: "auto" }}>
-        {metrics.map((m, i) => (
-          <div
-            key={m.label}
-            style={{
-              flex: "1 1 0", minWidth: "140px", padding: "16px 20px",
-              borderRight: i < metrics.length - 1 ? "1px solid #e5e7eb" : undefined,
-              background: m.highlighted ? "#fff7ed" : undefined,
-            }}
-          >
-            <BlockStack gap="100">
-              <InlineStack gap="100" blockAlign="center">
-                <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
-                {m.highlighted && <span style={{ fontSize: "10px" }}>⚠️</span>}
-              </InlineStack>
-              <Text variant="headingLg" as="p" tone={!m.trendPositive && m.trend !== "neutral" ? "critical" : undefined}>
-                {m.value}
-              </Text>
-              <InlineStack gap="100" blockAlign="center">
-                {m.trend !== "neutral" && (
-                  <span style={{ fontSize: "12px", color: m.trendPositive ? "#008060" : "#d92d20" }}>
-                    {m.trend === "up" ? "↑" : "↓"}
-                  </span>
-                )}
-                <Text variant="bodySm" as="span" tone="subdued">{m.sub}</Text>
-              </InlineStack>
-            </BlockStack>
+      <BlockStack gap="0">
+        <div style={{ display: "flex", overflowX: "auto" }}>
+          {metrics.map((m, i) => (
+            <div
+              key={m.label}
+              style={{
+                flex: "1 1 0", minWidth: "140px", padding: "16px 20px",
+                borderRight: i < metrics.length - 1 ? "1px solid #e5e7eb" : undefined,
+                background: m.highlighted ? "#fff7ed" : undefined,
+              }}
+            >
+              <BlockStack gap="100">
+                <InlineStack gap="100" blockAlign="center">
+                  <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
+                  {m.highlighted && <span style={{ fontSize: "10px" }}>⚠️</span>}
+                </InlineStack>
+                <Text variant="headingLg" as="p" tone={!m.trendPositive && m.trend !== "neutral" ? "critical" : undefined}>
+                  {m.value}
+                </Text>
+                <InlineStack gap="100" blockAlign="center">
+                  {m.trend !== "neutral" && (
+                    <span style={{ fontSize: "12px", color: m.trendPositive ? "#008060" : "#d92d20" }}>
+                      {m.trend === "up" ? "↑" : "↓"}
+                    </span>
+                  )}
+                  <Text variant="bodySm" as="span" tone="subdued">{m.sub}</Text>
+                </InlineStack>
+              </BlockStack>
+            </div>
+          ))}
+        </div>
+
+        {showExtended && (
+          <div style={{ borderTop: "1px solid #e5e7eb", display: "flex", overflowX: "auto" }}>
+            {extraMetrics.map((m, i) => (
+              <div
+                key={m.label}
+                style={{
+                  flex: "1 1 0", minWidth: "140px", padding: "14px 20px",
+                  borderRight: i < extraMetrics.length - 1 ? "1px solid #e5e7eb" : undefined,
+                  background: "#f9fafb",
+                }}
+              >
+                <BlockStack gap="100">
+                  <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
+                  <Text variant="headingMd" as="p" tone={m.critical ? "critical" : undefined}>{m.value}</Text>
+                  <Text variant="bodySm" as="p" tone="subdued">{m.sub}</Text>
+                </BlockStack>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        )}
+
+        <div style={{ padding: "10px 20px", borderTop: "1px solid #e5e7eb" }}>
+          <Button
+            variant="plain"
+            onClick={() => setShowExtended((v) => !v)}
+            disclosure={showExtended ? "up" : "down"}
+          >
+            {showExtended ? "Hide extended metrics" : "View extended metrics"}
+          </Button>
+        </div>
+      </BlockStack>
     </Card>
   );
 }
 
+// ── Chart ─────────────────────────────────────────────────────────────────────
 interface TooltipProps { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string; }
 
 function ChartTooltip({ active, payload, label }: TooltipProps) {
@@ -1059,7 +1332,6 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const lossDays = chartData.filter((d) => d.isLoss);
-
   if (!mounted) return <Box minHeight="280px" />;
 
   return (
@@ -1068,7 +1340,7 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
         <InlineStack align="space-between" blockAlign="center">
           <BlockStack gap="0">
             <Text variant="headingMd" as="h2">Profit stability</Text>
-            <Text variant="bodySm" as="p" tone="subdued">Last 30 days · Click red dots to view loss orders</Text>
+            <Text variant="bodySm" as="p" tone="subdued">Selected period · Click red dots to view loss orders</Text>
           </BlockStack>
           {lossDays.length > 0 && (
             <Badge tone="critical">{`${lossDays.length} loss day${lossDays.length > 1 ? "s" : ""}`}</Badge>
@@ -1078,22 +1350,16 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b7280" }} interval={6} axisLine={false} tickLine={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b7280" }} interval={Math.max(1, Math.floor(chartData.length / 8))} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} tickFormatter={(v) => "$" + v} axisLine={false} tickLine={false} />
               <Tooltip content={<ChartTooltip />} />
               <Line type="monotone" dataKey="revenue" stroke="#e5e7eb" strokeWidth={2} dot={false} strokeDasharray="4 4" name="revenue" />
               <Line type="monotone" dataKey="profit" stroke="#008060" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} name="profit" />
-              {/* Fix 3: zero line — visual split between profit and loss */}
               <ReferenceLine y={0} stroke="#d92d20" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: "Break even", position: "right", fontSize: 10, fill: "#d92d20" }} />
               {lossDays.map((d) => (
                 <ReferenceDot
-                  key={d.dateKey}
-                  x={d.date}
-                  y={d.profit}
-                  r={6}
-                  fill="#d92d20"
-                  stroke="white"
-                  strokeWidth={2}
+                  key={d.dateKey} x={d.date} y={d.profit} r={6}
+                  fill="#d92d20" stroke="white" strokeWidth={2}
                   style={{ cursor: "pointer" }}
                   onClick={() => navigate(`/app/orders?from=${d.dateKey}&to=${d.dateKey}&profitability=loss`)}
                 />
@@ -1120,6 +1386,7 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
   );
 }
 
+// ── Priority Orders ───────────────────────────────────────────────────────────
 function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: string }) {
   const needsAttention = orders.filter((o) => o.netProfit < 0 || o.marginPercent < 10);
   return (
@@ -1128,7 +1395,7 @@ function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: strin
         <InlineStack align="space-between" blockAlign="center">
           <BlockStack gap="0">
             <Text variant="headingMd" as="h2">Needs attention</Text>
-            <Text variant="bodySm" as="p" tone="subdued">Worst orders first — last 30 days</Text>
+            <Text variant="bodySm" as="p" tone="subdued">Worst orders first — selected period</Text>
           </BlockStack>
           {needsAttention.length > 0 && (
             <Badge tone="critical">{`${needsAttention.length} orders`}</Badge>
@@ -1151,15 +1418,10 @@ function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: strin
             o.cogsComplete
               ? <Badge key={o.id + "-m"} tone={o.marginPercent < 0 ? "critical" : o.marginPercent < 10 ? "warning" : "success"}>{o.marginPercent.toFixed(1) + "%"}</Badge>
               : <Badge key={o.id + "-m"} tone="attention">Incomplete</Badge>,
-            // Fix 4: show top cost reason + repeat indicator
             <InlineStack key={o.id + "-r"} gap="100" blockAlign="center">
               <Text variant="bodySm" as="span" tone="subdued">{o.topCostReason}</Text>
-              {o.repeatLossCount >= 3 && o.netProfit < 0 && (
-                <Badge tone="critical">{`×${o.repeatLossCount}`}</Badge>
-              )}
-              {o.repeatLossCount >= 2 && o.repeatLossCount < 3 && o.netProfit < 0 && (
-                <Badge tone="warning">{`×${o.repeatLossCount}`}</Badge>
-              )}
+              {o.repeatLossCount >= 3 && o.netProfit < 0 && <Badge tone="critical">{`×${o.repeatLossCount}`}</Badge>}
+              {o.repeatLossCount >= 2 && o.repeatLossCount < 3 && o.netProfit < 0 && <Badge tone="warning">{`×${o.repeatLossCount}`}</Badge>}
             </InlineStack>,
             o.isHeld
               ? <Badge key={o.id + "-s"} tone="warning">On Hold</Badge>
@@ -1176,6 +1438,7 @@ function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: strin
   );
 }
 
+// ── Held Orders ───────────────────────────────────────────────────────────────
 function HeldOrdersCard({ heldOrders, heldSavedAmount, onRelease, isSubmitting }: {
   heldOrders: HeldOrder[]; heldSavedAmount: number;
   onRelease: (id: string) => void; isSubmitting: boolean;
@@ -1226,13 +1489,15 @@ function HeldOrdersCard({ heldOrders, heldSavedAmount, onRelease, isSubmitting }
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const {
-    actionCenter, kpiMetrics, chartData, priorityOrders, heldOrders,
-    heldSavedAmount, missingCogsCount, missingCogsImpact,
-    visibleCards: initialVisibleCards, hasOrders, shop,
+    actionCenter, kpiMetrics, extendedKpis, revenueAllocation, productLeaderboard,
+    chartData, priorityOrders, heldOrders, heldSavedAmount,
+    missingCogsCount, missingCogsImpact, visibleCards: initialVisibleCards,
+    hasOrders, shop, dateFrom, dateTo,
   } = useLoaderData() as LoaderData;
 
   const submit = useSubmit();
   const navigation = useNavigation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const isLoading = navigation.state === "loading";
   const isSubmitting = navigation.state === "submitting";
 
@@ -1264,11 +1529,19 @@ export default function Dashboard() {
   }
 
   const isVisible = (id: CardId) => visibleCards.includes(id);
+
   const handleSaveConfig = () => {
     const newCards = ALL_CARDS.map((c) => c.id).filter((id) => draftCards.includes(id)) as CardId[];
     setVisibleCards(newCards);
     submit({ intent: "saveDashboardConfig", cards: JSON.stringify(newCards) }, { method: "POST" });
     setCustomizeOpen(false);
+  };
+
+  const handleDateUpdate = (from: string, to: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("from", from);
+    next.set("to", to);
+    setSearchParams(next);
   };
 
   return (
@@ -1280,16 +1553,39 @@ export default function Dashboard() {
       }}
     >
       <Layout>
+        {/* Date range picker — always visible */}
+        <Layout.Section>
+          <DateRangePicker dateFrom={dateFrom} dateTo={dateTo} onUpdate={handleDateUpdate} />
+        </Layout.Section>
+
         {isVisible("action_center") && (
-          <Layout.Section><ActionCenter actionCenter={actionCenter} missingCogsCount={missingCogsCount} /></Layout.Section>
+          <Layout.Section>
+            <ActionCenter actionCenter={actionCenter} missingCogsCount={missingCogsCount} />
+          </Layout.Section>
         )}
 
         {isVisible("kpi_strip") && (
-          <Layout.Section><KpiStrip metrics={kpiMetrics} /></Layout.Section>
+          <Layout.Section>
+            <KpiStrip metrics={kpiMetrics} extended={extendedKpis} />
+          </Layout.Section>
+        )}
+
+        {isVisible("revenue_allocation") && (
+          <Layout.Section>
+            <RevenueAllocationBar allocation={revenueAllocation} />
+          </Layout.Section>
+        )}
+
+        {isVisible("product_leaderboard") && (
+          <Layout.Section>
+            <ProductLeaderboard top={productLeaderboard.top} leaks={productLeaderboard.leaks} />
+          </Layout.Section>
         )}
 
         {isVisible("chart") && (
-          <Layout.Section><ProfitChart chartData={chartData} /></Layout.Section>
+          <Layout.Section>
+            <ProfitChart chartData={chartData} />
+          </Layout.Section>
         )}
 
         {(isVisible("priority_orders") || isVisible("held_orders")) && (

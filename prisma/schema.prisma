@@ -71,6 +71,9 @@ model ShopSettings {
   updatedAt DateTime @updatedAt
 
   onboardingComplete Boolean @default(false)
+
+    paymentGateways  String?  // JSON
+  shippingRules    String?  // JSON
 }
 
 model Order {
