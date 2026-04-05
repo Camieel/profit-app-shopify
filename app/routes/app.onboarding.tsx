@@ -20,12 +20,13 @@ interface RecentLoss {
 interface LoaderData {
   totalVariants: number;
   variantsWithCost: number;
-  // Aha moment data
+  // Aha moment data — cascading lookback (7d → 30d → 90d)
   recentOrderCount: number;
   unprofitableOrderCount: number;
   totalLoss7d: number;
   potentialHolds7d: number;
   worstRecentOrder: RecentLoss | null;
+  lookbackLabel: string; // "last 7 days" | "last 30 days" | "last 90 days"
   settings: {
     paymentGateway: string;
     transactionFeePercent: number;
@@ -52,8 +53,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);
-
   const [settings, metaIntegration, googleIntegration, tiktokIntegration] = await Promise.all([
     db.shopSettings.findUnique({ where: { shop } }),
     (db as any).adIntegration.findUnique({ where: { shop_platform: { shop, platform: "meta" } } }),
@@ -65,21 +64,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return redirect("/app");
   }
 
-  const [totalVariants, variantsWithCost, recentOrders] = await Promise.all([
+  const [totalVariants, variantsWithCost] = await Promise.all([
     db.productVariant.count({ where: { product: { shop } } }),
     db.productVariant.count({ where: { product: { shop }, effectiveCost: { not: null } } }),
-    db.order.findMany({
-      where: { shop, shopifyCreatedAt: { gte: sevenDaysAgo } },
-      select: {
-        shopifyOrderName: true, netProfit: true,
-        totalPrice: true, currency: true,
-      },
-      orderBy: { netProfit: "asc" },
-      take: 100,
-    }),
   ]);
 
-  const unprofitableOrders = recentOrders.filter((o) => o.netProfit < 0);
+  // Cascade lookback: 7d → 30d → 90d — always show the most recent real loss data
+  const orderSelect = {
+    shopifyOrderName: true, netProfit: true,
+    totalPrice: true, currency: true,
+  } as const;
+  const orderQuery = (since: Date) => db.order.findMany({
+    where: { shop, shopifyCreatedAt: { gte: since } },
+    select: orderSelect,
+    orderBy: { netProfit: "asc" },
+    take: 200,
+  });
+
+  const periods: { days: number; label: string }[] = [
+    { days: 7,  label: "last 7 days" },
+    { days: 30, label: "last 30 days" },
+    { days: 90, label: "last 90 days" },
+  ];
+
+  let recentOrders: Awaited<ReturnType<typeof orderQuery>> = [];
+  let unprofitableOrders: typeof recentOrders = [];
+  let lookbackLabel = "last 7 days";
+
+  for (const period of periods) {
+    const since = new Date(Date.now() - period.days * 86400000);
+    recentOrders = await orderQuery(since);
+    unprofitableOrders = recentOrders.filter((o) => o.netProfit < 0);
+    lookbackLabel = period.label;
+    // Stop as soon as we find loss orders — use this period
+    if (unprofitableOrders.length > 0) break;
+  }
+
   const totalLoss7d = unprofitableOrders.reduce((s, o) => s + Math.abs(o.netProfit), 0);
   const worstOrder = unprofitableOrders[0] ?? null;
 
@@ -89,8 +109,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     recentOrderCount: recentOrders.length,
     unprofitableOrderCount: unprofitableOrders.length,
     totalLoss7d,
-    // Estimate how many would have been held if hold was active
     potentialHolds7d: unprofitableOrders.length,
+    lookbackLabel,
     worstRecentOrder: worstOrder
       ? {
           orderName: worstOrder.shopifyOrderName,
@@ -243,7 +263,7 @@ export default function Onboarding() {
   const {
     totalVariants, variantsWithCost, settings, ads,
     recentOrderCount, unprofitableOrderCount, totalLoss7d,
-    potentialHolds7d, worstRecentOrder,
+    potentialHolds7d, worstRecentOrder, lookbackLabel,
   } = useLoaderData() as LoaderData;
 
   const fetcher = useFetcher();
@@ -339,7 +359,7 @@ export default function Onboarding() {
                     <Text as="h2" variant="headingMd" tone="critical">
                       ⚠️ Your store has unprofitable orders right now
                     </Text>
-                    <Text as="p" variant="bodySm" tone="subdued">Last 7 days · Before ClearProfit was active</Text>
+                    <Text as="p" variant="bodySm" tone="subdued">{`${lookbackLabel.charAt(0).toUpperCase() + lookbackLabel.slice(1)} · Before ClearProfit was active`}</Text>
                   </BlockStack>
                   <InlineStack gap="600" wrap>
                     <BlockStack gap="050">
@@ -376,7 +396,7 @@ export default function Onboarding() {
                     {`${potentialHolds7d} of these orders could have been automatically held before shipping.`}
                   </Text>
                   <Text as="p" variant="bodySm" tone="critical" fontWeight="semibold">
-                    {`At this rate, you're losing ${fmtCurrency(totalLoss7d * 4, worstRecentOrder?.currency ?? "USD")} per month.`}
+                    {`At this rate, you're losing ${fmtCurrency(totalLoss7d * (30 / (lookbackLabel === "last 7 days" ? 7 : lookbackLabel === "last 30 days" ? 30 : 90)), worstRecentOrder?.currency ?? "USD")} per month.`}
                   </Text>
                 </BlockStack>
               </div>
@@ -420,6 +440,9 @@ export default function Onboarding() {
     const allGood = missingCogs === 0 && totalVariants > 0;
     const noProducts = totalVariants === 0;
 
+    // Impact estimate: avg order revenue €75, missing COGS inflates margin by ~15%
+    const estOverstatedProfit = missingCogs * 75 * 0.15;
+
     return (
       <Page narrowWidth>
         <StepIndicator step={step} />
@@ -428,63 +451,85 @@ export default function Onboarding() {
             <BlockStack gap="100">
               <Text as="h1" variant="headingXl">Product costs (COGS)</Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                COGS is what you actually pay for a product.
+                What you actually pay per product. Without this, every profit figure is a guess.
               </Text>
             </BlockStack>
 
             <Divider />
 
-            {/* Harder framing */}
-            <div style={{ padding: "14px 16px", borderRadius: "8px", background: "#fff7ed", border: "1px solid #ffd591" }}>
-              <Text as="p" variant="bodySm" tone="caution">
-                <strong>Orders without cost = fake profit.</strong> If a variant has no cost price, it counts as €0 — making your margin look better than it really is. You might be losing money without knowing it.
-              </Text>
-            </div>
-
             {noProducts ? (
               <Banner tone="warning">
                 <Text as="p" variant="bodySm">
-                  No products have been synced yet. This happens automatically in the background. Check the <strong>Products</strong> page later to set your cost prices.
+                  No products synced yet — this happens automatically in the background.
+                  You can set cost prices later via <strong>COGS Configuration</strong> in the app.
                 </Text>
               </Banner>
+            ) : allGood ? (
+              <div style={{ padding: "16px", borderRadius: "10px", background: "#f6ffed", border: "1px solid #b7eb8f" }}>
+                <BlockStack gap="100">
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">
+                    {`✅ All ${totalVariants} variants have a cost price`}
+                  </Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Profit calculations will be accurate from the first order.
+                  </Text>
+                </BlockStack>
+              </div>
             ) : (
-              <BlockStack gap="300">
-                <Box
-                  background={allGood ? "bg-surface-success" : "bg-surface-caution"}
-                  padding="400"
-                  borderRadius="200"
-                >
-                  <InlineStack align="space-between" blockAlign="center">
-                    <Text as="p" variant="bodyMd" fontWeight="semibold">
-                      {variantsWithCost} / {totalVariants} variants have a cost price
+              <>
+                {/* Urgency — how much profit is currently overstated */}
+                <div style={{ padding: "16px", borderRadius: "10px", background: "#fff1f0", border: "1px solid #ffa39e" }}>
+                  <BlockStack gap="200">
+                    <BlockStack gap="050">
+                      <Text as="p" variant="headingSm" tone="critical">
+                        {`${missingCogs} of ${totalVariants} variants are missing a cost price`}
+                      </Text>
+                      <Text as="p" variant="bodySm" tone="critical">
+                        {`Your profit is currently overstated by an estimated ${fmtCurrency(estOverstatedProfit)} per order cycle. You may be losing money without knowing it.`}
+                      </Text>
+                    </BlockStack>
+                    <div style={{ height: "6px", borderRadius: "3px", background: "#ffd8d8", overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", width: `${cogsPercent}%`,
+                        background: "#d92d20", borderRadius: "3px", transition: "width 0.3s ease",
+                      }} />
+                    </div>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {`${cogsPercent}% complete — target is 95%+`}
                     </Text>
-                    <Badge tone={allGood ? "success" : "warning"}>{cogsPercent + "%"}</Badge>
-                  </InlineStack>
-                </Box>
+                  </BlockStack>
+                </div>
 
-                {!allGood && (
-                  <Banner tone="warning">
-                    <Text as="p" variant="bodySm">
-                      {missingCogs} variant{missingCogs !== 1 ? "s are" : " is"} missing a cost price.
-                      Set them on the <strong>Products</strong> page, or directly in Shopify via Products → variant → <em>Cost per item</em>.
-                    </Text>
-                  </Banner>
-                )}
+                {/* What to do */}
+                <div style={{ padding: "14px 16px", borderRadius: "8px", background: "#f9fafb", border: "1px solid #e5e7eb" }}>
+                  <BlockStack gap="200">
+                    <Text as="p" variant="bodySm" fontWeight="semibold">How to fix this:</Text>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        {"Option 1 — Open COGS Configuration and enter costs per variant. You can also bulk import via CSV."}
+                      </Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        {"Option 2 — Set cost prices in Shopify: Products → variant → Cost per item. ClearProfit syncs automatically."}
+                      </Text>
+                    </BlockStack>
+                    <Button url="/app/cogs" target="_blank" size="slim">
+                      Open COGS Configuration ↗
+                    </Button>
+                  </BlockStack>
+                </div>
 
-                {allGood && (
-                  <Banner tone="success">
-                    <Text as="p" variant="bodySm">
-                      All variants have a cost price. Profit calculation will be accurate from the start.
-                    </Text>
-                  </Banner>
-                )}
-              </BlockStack>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  You can continue setup now and fix cost prices later — but profit figures won't be accurate until this is complete.
+                </Text>
+              </>
             )}
 
             <Divider />
             <InlineStack align="space-between">
               <Button onClick={() => setStep(0)} disabled={isSaving}>Back</Button>
-              <Button variant="primary" onClick={() => setStep(2)}>Next</Button>
+              <Button variant="primary" onClick={() => setStep(2)}>
+                {allGood ? "Next" : "Continue anyway →"}
+              </Button>
             </InlineStack>
           </BlockStack>
         </Card>
@@ -492,7 +537,7 @@ export default function Onboarding() {
     );
   }
 
-  // ── STEP 2: Transaction Fees ─────────────────────────────────────────────────
+    // ── STEP 2: Transaction Fees ─────────────────────────────────────────────────
   if (step === 2) {
     // Impact calculation — show what this means financially
     const feePercentNum = parseFloat(feePercent) || 2.9;
@@ -615,7 +660,7 @@ export default function Onboarding() {
                     {`→ ${potentialHolds7d} orders in the last 7 days would have been held`}
                   </Text>
                   <Text as="p" variant="bodySm" tone="critical">
-                    {`→ Estimated protected: ${fmtCurrency(totalLoss7d, worstRecentOrder?.currency ?? "USD")}`}
+                    {`→ Estimated protected (${lookbackLabel}): ${fmtCurrency(totalLoss7d, worstRecentOrder?.currency ?? "USD")}`}
                   </Text>
                 </BlockStack>
               </div>
