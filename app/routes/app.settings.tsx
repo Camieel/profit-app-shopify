@@ -3,23 +3,15 @@ import { json } from "@remix-run/node";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { useLoaderData, useNavigation, useSubmit, useFetcher } from "react-router";
 import {
-  Page,
-  Layout,
-  Card,
-  Text,
-  Box,
-  BlockStack,
-  Button,
-  Banner,
-  TextField,
-  InlineStack,
-  Divider,
-  Badge,
+  Page, Layout, Card, Text, Box, BlockStack, Button, Banner,
+  TextField, InlineStack, Divider, Badge,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface SettingsData {
+  holdEnabled: boolean;
   holdMarginThreshold: number;
   alertMarginThreshold: number;
   transactionFeePercent: number;
@@ -37,65 +29,55 @@ interface SettingsData {
   appUrl: string;
 }
 
+// ── Loader ────────────────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
   const [settings, metaIntegration, googleIntegration, tiktokIntegration] =
     await Promise.all([
       db.shopSettings.findUnique({ where: { shop: session.shop } }),
-      (db as any).adIntegration.findUnique({
-        where: { shop_platform: { shop: session.shop, platform: "meta" } },
-      }),
-      (db as any).adIntegration.findUnique({
-        where: { shop_platform: { shop: session.shop, platform: "google" } },
-      }),
-      (db as any).adIntegration.findUnique({
-        where: { shop_platform: { shop: session.shop, platform: "tiktok" } },
-      }),
+      (db as any).adIntegration.findUnique({ where: { shop_platform: { shop: session.shop, platform: "meta" } } }),
+      (db as any).adIntegration.findUnique({ where: { shop_platform: { shop: session.shop, platform: "google" } } }),
+      (db as any).adIntegration.findUnique({ where: { shop_platform: { shop: session.shop, platform: "tiktok" } } }),
     ]);
 
   return json({
+    holdEnabled: settings?.holdEnabled ?? false,
     holdMarginThreshold: settings?.holdMarginThreshold ?? 0,
     alertMarginThreshold: settings?.alertMarginThreshold ?? 0,
     transactionFeePercent: settings?.transactionFeePercent ?? 2.9,
     transactionFeeFixed: settings?.transactionFeeFixed ?? 0.3,
     defaultShippingCost: settings?.defaultShippingCost ?? 0,
     alertEmail: settings?.alertEmail ?? "",
-    metaConnected: !!(metaIntegration?.isActive),
+    metaConnected: !!metaIntegration?.isActive,
     metaAccountName: metaIntegration?.accountName ?? null,
-    googleConnected: !!(googleIntegration?.isActive),
+    googleConnected: !!googleIntegration?.isActive,
     googleAccountName: googleIntegration?.accountName ?? null,
-    tiktokConnected: !!(tiktokIntegration?.isActive),
+    tiktokConnected: !!tiktokIntegration?.isActive,
     tiktokAccountName: tiktokIntegration?.accountName ?? null,
     shop: session.shop,
     metaAppId: process.env.META_APP_ID || "",
-    appUrl:
-      process.env.SHOPIFY_APP_URL ||
-      "https://profit-app-shopify-production.up.railway.app",
+    appUrl: process.env.SHOPIFY_APP_URL || "https://profit-app-shopify-production.up.railway.app",
   });
 };
 
+// ── Action ────────────────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
   if (intent === "saveSettings") {
-    const holdMarginThreshold =
-      parseFloat(formData.get("holdMarginThreshold") as string) || 0;
+    const holdMarginThreshold = parseFloat(formData.get("holdMarginThreshold") as string) || 0;
     await db.shopSettings.upsert({
       where: { shop: session.shop },
       update: {
         holdMarginThreshold,
         holdEnabled: holdMarginThreshold > 0,
-        alertMarginThreshold:
-          parseFloat(formData.get("alertMarginThreshold") as string) || 0,
-        transactionFeePercent:
-          parseFloat(formData.get("transactionFeePercent") as string) || 2.9,
-        transactionFeeFixed:
-          parseFloat(formData.get("transactionFeeFixed") as string) || 0.3,
-        defaultShippingCost:
-          parseFloat(formData.get("defaultShippingCost") as string) || 0,
+        alertMarginThreshold: parseFloat(formData.get("alertMarginThreshold") as string) || 0,
+        transactionFeePercent: parseFloat(formData.get("transactionFeePercent") as string) || 2.9,
+        transactionFeeFixed: parseFloat(formData.get("transactionFeeFixed") as string) || 0.3,
+        defaultShippingCost: parseFloat(formData.get("defaultShippingCost") as string) || 0,
         alertEmail: (formData.get("alertEmail") as string) || null,
       },
       create: { shop: session.shop },
@@ -104,232 +86,100 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "disconnectMeta") {
-    await (db as any).adIntegration.updateMany({
-      where: { shop: session.shop, platform: "meta" },
-      data: { isActive: false },
-    });
+    await (db as any).adIntegration.updateMany({ where: { shop: session.shop, platform: "meta" }, data: { isActive: false } });
     return json({ success: true });
   }
-
   if (intent === "disconnectGoogle") {
-    await (db as any).adIntegration.updateMany({
-      where: { shop: session.shop, platform: "google" },
-      data: { isActive: false },
-    });
+    await (db as any).adIntegration.updateMany({ where: { shop: session.shop, platform: "google" }, data: { isActive: false } });
     return json({ success: true });
   }
-
   if (intent === "disconnectTiktok") {
-    await (db as any).adIntegration.updateMany({
-      where: { shop: session.shop, platform: "tiktok" },
-      data: { isActive: false },
-    });
+    await (db as any).adIntegration.updateMany({ where: { shop: session.shop, platform: "tiktok" }, data: { isActive: false } });
     return json({ success: true });
   }
 
   if (intent === "syncMeta") {
-    const integration = await (db as any).adIntegration.findUnique({
-      where: { shop_platform: { shop: session.shop, platform: "meta" } },
-    });
-    if (!integration?.isActive) {
-      return json({ error: "Meta not connected" }, { status: 400 });
-    }
+    const integration = await (db as any).adIntegration.findUnique({ where: { shop_platform: { shop: session.shop, platform: "meta" } } });
+    if (!integration?.isActive) return json({ error: "Meta not connected" }, { status: 400 });
     try {
-      const since = new Date();
-      since.setDate(since.getDate() - 30);
+      const since = new Date(); since.setDate(since.getDate() - 30);
       const sinceStr = since.toISOString().split("T")[0];
       const untilStr = new Date().toISOString().split("T")[0];
-
       const res = await fetch(
-        `https://graph.facebook.com/v19.0/${integration.accountId}/insights?` +
-          `fields=spend,impressions,clicks,date_start&` +
-          `time_increment=1&` +
-          `time_range={"since":"${sinceStr}","until":"${untilStr}"}&` +
-          `access_token=${integration.accessToken}`
+        `https://graph.facebook.com/v19.0/${integration.accountId}/insights?fields=spend,impressions,clicks,date_start&time_increment=1&time_range={"since":"${sinceStr}","until":"${untilStr}"}&access_token=${integration.accessToken}`
       );
       const data = (await res.json()) as any;
-
       let synced = 0;
       for (const day of data.data ?? []) {
         await (db as any).adSpend.upsert({
-          where: {
-            shop_platform_date: {
-              shop: session.shop,
-              platform: "meta",
-              date: day.date_start,
-            },
-          },
-          update: {
-            spend: parseFloat(day.spend ?? "0"),
-            impressions: parseInt(day.impressions ?? "0"),
-            clicks: parseInt(day.clicks ?? "0"),
-            syncedAt: new Date(),
-          },
-          create: {
-            shop: session.shop,
-            platform: "meta",
-            date: day.date_start,
-            spend: parseFloat(day.spend ?? "0"),
-            impressions: parseInt(day.impressions ?? "0"),
-            clicks: parseInt(day.clicks ?? "0"),
-          },
+          where: { shop_platform_date: { shop: session.shop, platform: "meta", date: day.date_start } },
+          update: { spend: parseFloat(day.spend ?? "0"), impressions: parseInt(day.impressions ?? "0"), clicks: parseInt(day.clicks ?? "0"), syncedAt: new Date() },
+          create: { shop: session.shop, platform: "meta", date: day.date_start, spend: parseFloat(day.spend ?? "0"), impressions: parseInt(day.impressions ?? "0"), clicks: parseInt(day.clicks ?? "0") },
         });
         synced++;
       }
       return json({ success: true, synced, platform: "meta" });
     } catch (err) {
-      console.error("[Meta Manual Sync] Error:", err);
+      console.error("[Meta Manual Sync]", err);
       return json({ error: "Sync failed" }, { status: 500 });
     }
   }
 
   if (intent === "syncGoogle") {
-    const integration = await (db as any).adIntegration.findUnique({
-      where: { shop_platform: { shop: session.shop, platform: "google" } },
-    });
-    if (!integration?.isActive) {
-      return json({ error: "Google not connected" }, { status: 400 });
-    }
+    const integration = await (db as any).adIntegration.findUnique({ where: { shop_platform: { shop: session.shop, platform: "google" } } });
+    if (!integration?.isActive) return json({ error: "Google not connected" }, { status: 400 });
     try {
       const tokens = JSON.parse(integration.accessToken);
-      const accessToken = tokens.accessToken;
-      const customerId = integration.accountId;
-
-      const since = new Date();
-      since.setDate(since.getDate() - 30);
+      const since = new Date(); since.setDate(since.getDate() - 30);
       const sinceStr = since.toISOString().split("T")[0];
       const untilStr = new Date().toISOString().split("T")[0];
-
-      const query = `
-        SELECT segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks
-        FROM campaign
-        WHERE segments.date BETWEEN '${sinceStr}' AND '${untilStr}'
-      `;
-
-      const res = await fetch(
-        `https://googleads.googleapis.com/v17/customers/${customerId}/googleAds:search`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ query }),
-        }
-      );
+      const query = `SELECT segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks FROM campaign WHERE segments.date BETWEEN '${sinceStr}' AND '${untilStr}'`;
+      const res = await fetch(`https://googleads.googleapis.com/v17/customers/${integration.accountId}/googleAds:search`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}`, "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN!, "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
       const data = (await res.json()) as any;
-
-      const byDate = new Map<
-        string,
-        { spend: number; impressions: number; clicks: number }
-      >();
+      const byDate = new Map<string, { spend: number; impressions: number; clicks: number }>();
       for (const row of data.results ?? []) {
         const date = row.segments?.date;
-        const spend = (row.metrics?.costMicros ?? 0) / 1_000_000;
-        const impressions = row.metrics?.impressions ?? 0;
-        const clicks = row.metrics?.clicks ?? 0;
         if (!date) continue;
-        const existing = byDate.get(date) ?? {
-          spend: 0,
-          impressions: 0,
-          clicks: 0,
-        };
-        byDate.set(date, {
-          spend: existing.spend + spend,
-          impressions: existing.impressions + impressions,
-          clicks: existing.clicks + clicks,
-        });
+        const existing = byDate.get(date) ?? { spend: 0, impressions: 0, clicks: 0 };
+        byDate.set(date, { spend: existing.spend + (row.metrics?.costMicros ?? 0) / 1_000_000, impressions: existing.impressions + (row.metrics?.impressions ?? 0), clicks: existing.clicks + (row.metrics?.clicks ?? 0) });
       }
-
       let synced = 0;
       for (const [date, metrics] of byDate) {
-        await (db as any).adSpend.upsert({
-          where: {
-            shop_platform_date: {
-              shop: session.shop,
-              platform: "google",
-              date,
-            },
-          },
-          update: { ...metrics, syncedAt: new Date() },
-          create: { shop: session.shop, platform: "google", date, ...metrics },
-        });
+        await (db as any).adSpend.upsert({ where: { shop_platform_date: { shop: session.shop, platform: "google", date } }, update: { ...metrics, syncedAt: new Date() }, create: { shop: session.shop, platform: "google", date, ...metrics } });
         synced++;
       }
       return json({ success: true, synced, platform: "google" });
     } catch (err) {
-      console.error("[Google Manual Sync] Error:", err);
+      console.error("[Google Manual Sync]", err);
       return json({ error: "Sync failed" }, { status: 500 });
     }
   }
 
   if (intent === "syncTiktok") {
-    const integration = await (db as any).adIntegration.findUnique({
-      where: { shop_platform: { shop: session.shop, platform: "tiktok" } },
-    });
-    if (!integration?.isActive) {
-      return json({ error: "TikTok not connected" }, { status: 400 });
-    }
+    const integration = await (db as any).adIntegration.findUnique({ where: { shop_platform: { shop: session.shop, platform: "tiktok" } } });
+    if (!integration?.isActive) return json({ error: "TikTok not connected" }, { status: 400 });
     try {
-      const since = new Date();
-      since.setDate(since.getDate() - 30);
-      const sinceStr = since.toISOString().split("T")[0];
-      const untilStr = new Date().toISOString().split("T")[0];
-
-      const res = await fetch(
-        "https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/",
-        {
-          method: "POST",
-          headers: {
-            "Access-Token": integration.accessToken,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            advertiser_id: integration.accountId,
-            report_type: "BASIC",
-            dimensions: ["stat_time_day"],
-            metrics: ["spend", "impressions", "clicks"],
-            start_date: sinceStr,
-            end_date: untilStr,
-            page_size: 100,
-          }),
-        }
-      );
+      const since = new Date(); since.setDate(since.getDate() - 30);
+      const res = await fetch("https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/", {
+        method: "POST",
+        headers: { "Access-Token": integration.accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ advertiser_id: integration.accountId, report_type: "BASIC", dimensions: ["stat_time_day"], metrics: ["spend", "impressions", "clicks"], start_date: since.toISOString().split("T")[0], end_date: new Date().toISOString().split("T")[0], page_size: 100 }),
+      });
       const data = (await res.json()) as any;
-
       let synced = 0;
       for (const row of data.data?.list ?? []) {
         const date = row.dimensions?.stat_time_day?.split(" ")[0];
         if (!date) continue;
-        await (db as any).adSpend.upsert({
-          where: {
-            shop_platform_date: {
-              shop: session.shop,
-              platform: "tiktok",
-              date,
-            },
-          },
-          update: {
-            spend: parseFloat(row.metrics?.spend ?? "0"),
-            impressions: parseInt(row.metrics?.impressions ?? "0"),
-            clicks: parseInt(row.metrics?.clicks ?? "0"),
-            syncedAt: new Date(),
-          },
-          create: {
-            shop: session.shop,
-            platform: "tiktok",
-            date,
-            spend: parseFloat(row.metrics?.spend ?? "0"),
-            impressions: parseInt(row.metrics?.impressions ?? "0"),
-            clicks: parseInt(row.metrics?.clicks ?? "0"),
-          },
-        });
+        await (db as any).adSpend.upsert({ where: { shop_platform_date: { shop: session.shop, platform: "tiktok", date } }, update: { spend: parseFloat(row.metrics?.spend ?? "0"), impressions: parseInt(row.metrics?.impressions ?? "0"), clicks: parseInt(row.metrics?.clicks ?? "0"), syncedAt: new Date() }, create: { shop: session.shop, platform: "tiktok", date, spend: parseFloat(row.metrics?.spend ?? "0"), impressions: parseInt(row.metrics?.impressions ?? "0"), clicks: parseInt(row.metrics?.clicks ?? "0") } });
         synced++;
       }
       return json({ success: true, synced, platform: "tiktok" });
     } catch (err) {
-      console.error("[TikTok Manual Sync] Error:", err);
+      console.error("[TikTok Manual Sync]", err);
       return json({ error: "Sync failed" }, { status: 500 });
     }
   }
@@ -337,23 +187,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
+// ── Helper ────────────────────────────────────────────────────────────────────
+function fmtCurrency(n: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n);
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const data = useLoaderData() as SettingsData;
-  const [holdThreshold, setHoldThreshold] = useState(
-    String(data.holdMarginThreshold)
-  );
-  const [alertThreshold, setAlertThreshold] = useState(
-    String(data.alertMarginThreshold)
-  );
-  const [feePercent, setFeePercent] = useState(
-    String(data.transactionFeePercent)
-  );
+
+  const [holdThreshold, setHoldThreshold] = useState(String(data.holdMarginThreshold));
+  const [alertThreshold, setAlertThreshold] = useState(String(data.alertMarginThreshold));
+  const [feePercent, setFeePercent] = useState(String(data.transactionFeePercent));
   const [feeFixed, setFeeFixed] = useState(String(data.transactionFeeFixed));
-  const [shippingCost, setShippingCost] = useState(
-    String(data.defaultShippingCost)
-  );
+  const [shippingCost, setShippingCost] = useState(String(data.defaultShippingCost));
   const [alertEmail, setAlertEmail] = useState(data.alertEmail);
-  const [showBanner, setShowBanner] = useState(false);
+  const [showSavedBanner, setShowSavedBanner] = useState(false);
 
   const submit = useSubmit();
   const metaSyncFetcher = useFetcher();
@@ -362,84 +211,113 @@ export default function SettingsPage() {
   const navigation = useNavigation();
 
   const isSaving = navigation.state === "submitting";
-  const isMetaSyncing = metaSyncFetcher.state === "submitting";
-  const isGoogleSyncing = googleSyncFetcher.state === "submitting";
-  const isTiktokSyncing = tiktokSyncFetcher.state === "submitting";
-
-  const metaSyncResult = metaSyncFetcher.data as any;
-  const googleSyncResult = googleSyncFetcher.data as any;
-  const tiktokSyncResult = tiktokSyncFetcher.data as any;
 
   const handleSave = () => {
     submit(
-      {
-        intent: "saveSettings",
-        holdMarginThreshold: holdThreshold,
-        alertMarginThreshold: alertThreshold,
-        transactionFeePercent: feePercent,
-        transactionFeeFixed: feeFixed,
-        defaultShippingCost: shippingCost,
-        alertEmail,
-      },
+      { intent: "saveSettings", holdMarginThreshold: holdThreshold, alertMarginThreshold: alertThreshold, transactionFeePercent: feePercent, transactionFeeFixed: feeFixed, defaultShippingCost: shippingCost, alertEmail },
       { method: "POST" }
     );
-    setShowBanner(true);
+    setShowSavedBanner(true);
   };
 
   const handleConnectMeta = () => {
-    const redirectUri = encodeURIComponent(
-      `${data.appUrl}/connect/meta/callback`
-    );
-    const scopes = encodeURIComponent(
-      "ads_read,ads_management,business_management"
-    );
+    const redirectUri = encodeURIComponent(`${data.appUrl}/connect/meta/callback`);
+    const scopes = encodeURIComponent("ads_read,ads_management,business_management");
     const state = btoa(data.shop);
-    const url =
-      `https://www.facebook.com/v19.0/dialog/oauth?` +
-      `client_id=${data.metaAppId}` +
-      `&redirect_uri=${redirectUri}` +
-      `&scope=${scopes}` +
-      `&state=${state}` +
-      `&response_type=code`;
-    
-    // Open in new tab
-    window.open(url, "_blank");
+    window.open(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${data.metaAppId}&redirect_uri=${redirectUri}&scope=${scopes}&state=${state}&response_type=code`, "_blank");
   };
+  const handleConnectGoogle = () => window.open(`${data.appUrl}/connect/google?shop=${data.shop}`, "_blank");
+  const handleConnectTiktok = () => window.open(`${data.appUrl}/connect/tiktok?shop=${data.shop}`, "_blank");
 
-  const handleConnectGoogle = () => {
-    // Open in new tab
-    window.open(`${data.appUrl}/connect/google?shop=${data.shop}`, "_blank");
-  };
+  // Derived state for live impact preview
+  const feePercentNum = parseFloat(feePercent) || 0;
+  const feeFixedNum = parseFloat(feeFixed) || 0;
+  const avgOrderValue = 75;
+  const avgFeePerOrder = (avgOrderValue * feePercentNum / 100) + feeFixedNum;
+  const avgMonthlyFees = avgFeePerOrder * 200;
 
-  const handleConnectTiktok = () => {
-    // Open in new tab
-    window.open(`${data.appUrl}/connect/tiktok?shop=${data.shop}`, "_blank");
-  };
+  const holdThresholdNum = parseFloat(holdThreshold) || 0;
+  const holdsActive = holdThresholdNum > 0;
+
+  const hasAnyAd = data.metaConnected || data.googleConnected || data.tiktokConnected;
+  const adsNotConnected = !hasAnyAd;
+
+  // Protection status for the Action Center
+  const protectionIssues: string[] = [];
+  if (!holdsActive) protectionIssues.push("Fulfillment holds are off — unprofitable orders will ship automatically");
+  if (!alertEmail) protectionIssues.push("No alert email set — you won't be notified of loss orders");
+  if (adsNotConnected) protectionIssues.push("No ad accounts connected — ad spend is missing from profit calculations");
 
   return (
     <Page title="Settings" backAction={{ content: "Dashboard", url: "/app" }}>
       <Layout>
-        {showBanner && !isSaving && (
+        {/* Saved banner */}
+        {showSavedBanner && !isSaving && (
           <Layout.Section>
-            <Banner
-              title="Settings saved"
-              tone="success"
-              onDismiss={() => setShowBanner(false)}
-            />
+            <Banner tone="success" title="Settings saved" onDismiss={() => setShowSavedBanner(false)} />
           </Layout.Section>
         )}
+
+        {/* Protection status — Action Center for settings */}
+        <Layout.Section>
+          {protectionIssues.length === 0 ? (
+            <div style={{ padding: "16px 20px", borderRadius: "12px", background: "#f6ffed", border: "1px solid #b7eb8f" }}>
+              <InlineStack gap="200" blockAlign="center">
+                <span style={{ fontSize: "18px" }}>✅</span>
+                <BlockStack gap="0">
+                  <Text variant="headingSm" as="h3">Your store is fully protected</Text>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    Holds active · Alerts configured · Ad spend tracked
+                  </Text>
+                </BlockStack>
+              </InlineStack>
+            </div>
+          ) : (
+            <div style={{ padding: "16px 20px", borderRadius: "12px", background: "#fff1f0", border: "1px solid #ffa39e" }}>
+              <BlockStack gap="200">
+                <InlineStack gap="200" blockAlign="center">
+                  <span style={{ fontSize: "18px" }}>⚠️</span>
+                  <Text variant="headingSm" as="h3">
+                    {`${protectionIssues.length} protection gap${protectionIssues.length > 1 ? "s" : ""} — review below`}
+                  </Text>
+                </InlineStack>
+                {protectionIssues.map((issue, i) => (
+                  <InlineStack key={i} gap="200" blockAlign="center">
+                    <span style={{ fontSize: "12px", color: "#d92d20", flexShrink: 0 }}>→</span>
+                    <Text variant="bodySm" as="p" tone="critical">{issue}</Text>
+                  </InlineStack>
+                ))}
+              </BlockStack>
+            </div>
+          )}
+        </Layout.Section>
 
         {/* Fulfillment Hold */}
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h2">
-                Fulfillment Hold
-              </Text>
-              <Text as="p" tone="subdued">
-                Orders below this margin % are automatically held before
-                shipping. Set to 0 to disable.
-              </Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text variant="headingMd" as="h2">Fulfillment Hold</Text>
+                <Badge tone={holdsActive ? "success" : "critical"}>
+                  {holdsActive ? "Active" : "Off"}
+                </Badge>
+              </InlineStack>
+
+              {/* Context — makes it feel consequential */}
+              {!holdsActive ? (
+                <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#fff1f0", border: "1px solid #ffa39e" }}>
+                  <Text variant="bodySm" as="p" tone="critical">
+                    Holds are off. Unprofitable orders are shipping without review. Set a threshold to start protecting your margins.
+                  </Text>
+                </div>
+              ) : (
+                <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#f6ffed", border: "1px solid #b7eb8f" }}>
+                  <Text variant="bodySm" as="p" tone="success">
+                    {`Any order with a margin below ${holdThresholdNum}% will be held before shipping. You review and decide.`}
+                  </Text>
+                </div>
+              )}
+
               <TextField
                 label="Hold threshold (%)"
                 type="number"
@@ -447,8 +325,14 @@ export default function SettingsPage() {
                 onChange={setHoldThreshold}
                 suffix="%"
                 autoComplete="off"
-                helpText="Example: 10 means hold any order with less than 10% margin"
+                helpText="Set to 0 to disable holds. Set to 10 to hold any order below 10% margin."
               />
+
+              {holdsActive && (
+                <Text variant="bodySm" as="p" tone="subdued">
+                  You stay in control — held orders appear in your dashboard where you can release or cancel them.
+                </Text>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -457,12 +341,14 @@ export default function SettingsPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h2">
-                Margin Alerts
-              </Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text variant="headingMd" as="h2">Margin Alerts</Text>
+                <Badge tone={alertEmail ? "success" : "attention"}>
+                  {alertEmail ? "Active" : "No email set"}
+                </Badge>
+              </InlineStack>
               <Text as="p" tone="subdued">
-                Get notified when an order falls below this margin. Set to 0 to
-                disable.
+                Get an email the moment an order falls below your threshold. You'll know before you've opened your dashboard.
               </Text>
               <TextField
                 label="Alert threshold (%)"
@@ -471,6 +357,7 @@ export default function SettingsPage() {
                 onChange={setAlertThreshold}
                 suffix="%"
                 autoComplete="off"
+                helpText="Set to 0 to alert on loss orders only. Set to 10 to alert on all orders below 10%."
               />
               <TextField
                 label="Alert email address(es)"
@@ -478,7 +365,7 @@ export default function SettingsPage() {
                 value={alertEmail}
                 onChange={setAlertEmail}
                 placeholder="you@example.com, colleague@example.com"
-                helpText="Separate multiple addresses with a comma."
+                helpText="Separate multiple addresses with a comma. Also used for weekly P&L summaries (every Monday)."
                 autoComplete="off"
               />
             </BlockStack>
@@ -489,12 +376,9 @@ export default function SettingsPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h2">
-                Transaction Fees
-              </Text>
+              <Text variant="headingMd" as="h2">Transaction Fees</Text>
               <Text as="p" tone="subdued">
-                Default is Shopify Payments (2.9% + $0.30). Adjust if you use a
-                different gateway.
+                Deducted from every order profit calculation. Adjust if you use a different gateway than Shopify Payments (2.9% + $0.30).
               </Text>
               <InlineStack gap="400">
                 <Box width="50%">
@@ -518,6 +402,21 @@ export default function SettingsPage() {
                   />
                 </Box>
               </InlineStack>
+              {/* Live impact preview */}
+              <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#f9fafb", border: "1px solid #e5e7eb" }}>
+                <BlockStack gap="050">
+                  <Text variant="bodySm" as="p" fontWeight="semibold">With these settings:</Text>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    {`Avg fee per $${avgOrderValue} order: ~${fmtCurrency(avgFeePerOrder)}`}
+                  </Text>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    {`Monthly impact (est. 200 orders): ~${fmtCurrency(avgMonthlyFees)}`}
+                  </Text>
+                  <Text variant="bodySm" as="p" tone="critical">
+                    This is money leaving your business on every sale.
+                  </Text>
+                </BlockStack>
+              </div>
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -526,11 +425,9 @@ export default function SettingsPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h2">
-                Shipping Cost
-              </Text>
+              <Text variant="headingMd" as="h2">Shipping Cost</Text>
               <Text as="p" tone="subdued">
-                What you pay the carrier per order on average.
+                Your average carrier cost per order. Used in profit calculations when Shopify doesn't provide a shipping cost line.
               </Text>
               <TextField
                 label="Default shipping cost"
@@ -548,221 +445,74 @@ export default function SettingsPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h2">
-                Ad Integrations
-              </Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text variant="headingMd" as="h2">Ad Integrations</Text>
+                <Badge tone={hasAnyAd ? "success" : "attention"}>
+                  {hasAnyAd
+                    ? `${[data.metaConnected, data.googleConnected, data.tiktokConnected].filter(Boolean).length} connected`
+                    : "None connected"}
+                </Badge>
+              </InlineStack>
+
+              {adsNotConnected && (
+                <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#fff7ed", border: "1px solid #ffd591" }}>
+                  <Text variant="bodySm" as="p" tone="caution">
+                    Without ad accounts connected, your profit calculations don't include ad spend — margins will appear higher than they really are.
+                  </Text>
+                </div>
+              )}
+
               <Text as="p" tone="subdued">
-                Connect your ad accounts to include ad spend in profit
-                calculations. Spend is allocated proportionally across orders
-                each day.
+                Daily ad spend is allocated proportionally across orders each day based on revenue share. Connect once — syncs automatically.
               </Text>
 
               <Divider />
 
               {/* Meta */}
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <InlineStack gap="200" blockAlign="center">
-                    <Text variant="bodyMd" as="p" fontWeight="semibold">
-                      Meta Ads
-                    </Text>
-                    {data.metaConnected && (
-                      <Badge tone="success">Connected</Badge>
-                    )}
-                  </InlineStack>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    {data.metaConnected
-                      ? (data.metaAccountName ?? "Ad Account connected")
-                      : "Not connected"}
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="200">
-                  {data.metaConnected && (
-                    <Button
-                      size="slim"
-                      onClick={() =>
-                        metaSyncFetcher.submit(
-                          { intent: "syncMeta" },
-                          { method: "POST" }
-                        )
-                      }
-                      loading={isMetaSyncing}
-                    >
-                      Sync now
-                    </Button>
-                  )}
-                  {data.metaConnected ? (
-                    <Button
-                      variant="plain"
-                      tone="critical"
-                      onClick={() =>
-                        submit(
-                          { intent: "disconnectMeta" },
-                          { method: "POST" }
-                        )
-                      }
-                    >
-                      Disconnect
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="primary"
-                      size="slim"
-                      onClick={handleConnectMeta}
-                    >
-                      Connect Meta Ads
-                    </Button>
-                  )}
-                </InlineStack>
-              </InlineStack>
-              {metaSyncResult?.synced !== undefined && (
-                <Banner tone="success">
-                  <p>{"Synced " + metaSyncResult.synced + " days of Meta ad spend."}</p>
-                </Banner>
-              )}
-              {metaSyncResult?.error && (
-                <Banner tone="critical">
-                  <p>{"Meta sync failed: " + metaSyncResult.error}</p>
-                </Banner>
-              )}
+              {renderAdPlatform({
+                label: "📘 Meta Ads",
+                connected: data.metaConnected,
+                accountName: data.metaAccountName,
+                onConnect: handleConnectMeta,
+                onDisconnect: () => submit({ intent: "disconnectMeta" }, { method: "POST" }),
+                onSync: () => metaSyncFetcher.submit({ intent: "syncMeta" }, { method: "POST" }),
+                isSyncing: metaSyncFetcher.state === "submitting",
+                syncResult: metaSyncFetcher.data as any,
+                platform: "Meta",
+                submit,
+              })}
 
               <Divider />
 
               {/* Google */}
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <InlineStack gap="200" blockAlign="center">
-                    <Text variant="bodyMd" as="p" fontWeight="semibold">
-                      Google Ads
-                    </Text>
-                    {data.googleConnected && (
-                      <Badge tone="success">Connected</Badge>
-                    )}
-                  </InlineStack>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    {data.googleConnected
-                      ? (data.googleAccountName ?? "Ad Account connected")
-                      : "Not connected"}
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="200">
-                  {data.googleConnected && (
-                    <Button
-                      size="slim"
-                      onClick={() =>
-                        googleSyncFetcher.submit(
-                          { intent: "syncGoogle" },
-                          { method: "POST" }
-                        )
-                      }
-                      loading={isGoogleSyncing}
-                    >
-                      Sync now
-                    </Button>
-                  )}
-                  {data.googleConnected ? (
-                    <Button
-                      variant="plain"
-                      tone="critical"
-                      onClick={() =>
-                        submit(
-                          { intent: "disconnectGoogle" },
-                          { method: "POST" }
-                        )
-                      }
-                    >
-                      Disconnect
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="primary"
-                      size="slim"
-                      onClick={handleConnectGoogle}
-                    >
-                      Connect Google Ads
-                    </Button>
-                  )}
-                </InlineStack>
-              </InlineStack>
-              {googleSyncResult?.synced !== undefined && (
-                <Banner tone="success">
-                  <p>{"Synced " + googleSyncResult.synced + " days of Google ad spend."}</p>
-                </Banner>
-              )}
-              {googleSyncResult?.error && (
-                <Banner tone="critical">
-                  <p>{"Google sync failed: " + googleSyncResult.error}</p>
-                </Banner>
-              )}
+              {renderAdPlatform({
+                label: "🔍 Google Ads",
+                connected: data.googleConnected,
+                accountName: data.googleAccountName,
+                onConnect: handleConnectGoogle,
+                onDisconnect: () => submit({ intent: "disconnectGoogle" }, { method: "POST" }),
+                onSync: () => googleSyncFetcher.submit({ intent: "syncGoogle" }, { method: "POST" }),
+                isSyncing: googleSyncFetcher.state === "submitting",
+                syncResult: googleSyncFetcher.data as any,
+                platform: "Google",
+                submit,
+              })}
 
               <Divider />
 
               {/* TikTok */}
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <InlineStack gap="200" blockAlign="center">
-                    <Text variant="bodyMd" as="p" fontWeight="semibold">
-                      TikTok Ads
-                    </Text>
-                    {data.tiktokConnected && (
-                      <Badge tone="success">Connected</Badge>
-                    )}
-                  </InlineStack>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    {data.tiktokConnected
-                      ? (data.tiktokAccountName ?? "Ad Account connected")
-                      : "Not connected"}
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="200">
-                  {data.tiktokConnected && (
-                    <Button
-                      size="slim"
-                      onClick={() =>
-                        tiktokSyncFetcher.submit(
-                          { intent: "syncTiktok" },
-                          { method: "POST" }
-                        )
-                      }
-                      loading={isTiktokSyncing}
-                    >
-                      Sync now
-                    </Button>
-                  )}
-                  {data.tiktokConnected ? (
-                    <Button
-                      variant="plain"
-                      tone="critical"
-                      onClick={() =>
-                        submit(
-                          { intent: "disconnectTiktok" },
-                          { method: "POST" }
-                        )
-                      }
-                    >
-                      Disconnect
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="primary"
-                      size="slim"
-                      onClick={handleConnectTiktok}
-                    >
-                      Connect TikTok Ads
-                    </Button>
-                  )}
-                </InlineStack>
-              </InlineStack>
-              {tiktokSyncResult?.synced !== undefined && (
-                <Banner tone="success">
-                  <p>{"Synced " + tiktokSyncResult.synced + " days of TikTok ad spend."}</p>
-                </Banner>
-              )}
-              {tiktokSyncResult?.error && (
-                <Banner tone="critical">
-                  <p>{"TikTok sync failed: " + tiktokSyncResult.error}</p>
-                </Banner>
-              )}
+              {renderAdPlatform({
+                label: "🎵 TikTok Ads",
+                connected: data.tiktokConnected,
+                accountName: data.tiktokAccountName,
+                onConnect: handleConnectTiktok,
+                onDisconnect: () => submit({ intent: "disconnectTiktok" }, { method: "POST" }),
+                onSync: () => tiktokSyncFetcher.submit({ intent: "syncTiktok" }, { method: "POST" }),
+                isSyncing: tiktokSyncFetcher.state === "submitting",
+                syncResult: tiktokSyncFetcher.data as any,
+                platform: "TikTok",
+                submit,
+              })}
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -774,5 +524,58 @@ export default function SettingsPage() {
         </Layout.Section>
       </Layout>
     </Page>
+  );
+}
+
+// ── Ad platform row — extracted to avoid repetition ───────────────────────────
+function renderAdPlatform({
+  label, connected, accountName, onConnect, onDisconnect, onSync,
+  isSyncing, syncResult, platform,
+}: {
+  label: string;
+  connected: boolean;
+  accountName: string | null;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onSync: () => void;
+  isSyncing: boolean;
+  syncResult: any;
+  platform: string;
+  submit: ReturnType<typeof useSubmit>;
+}) {
+  return (
+    <BlockStack gap="200">
+      <InlineStack align="space-between" blockAlign="center">
+        <BlockStack gap="050">
+          <InlineStack gap="200" blockAlign="center">
+            <Text variant="bodyMd" as="p" fontWeight="semibold">{label}</Text>
+            {connected && <Badge tone="success">Connected</Badge>}
+          </InlineStack>
+          <Text variant="bodySm" as="p" tone="subdued">
+            {connected ? (accountName ?? "Ad account connected") : "Not connected — ad spend excluded from profit"}
+          </Text>
+        </BlockStack>
+        <InlineStack gap="200">
+          {connected && (
+            <Button size="slim" onClick={onSync} loading={isSyncing}>Sync now</Button>
+          )}
+          {connected ? (
+            <Button variant="plain" tone="critical" onClick={onDisconnect}>Disconnect</Button>
+          ) : (
+            <Button variant="primary" size="slim" onClick={onConnect}>Connect →</Button>
+          )}
+        </InlineStack>
+      </InlineStack>
+      {syncResult?.synced !== undefined && (
+        <Banner tone="success">
+          <p>{`Synced ${syncResult.synced} days of ${platform} ad spend. Profit calculations updated.`}</p>
+        </Banner>
+      )}
+      {syncResult?.error && (
+        <Banner tone="critical">
+          <p>{`${platform} sync failed: ${syncResult.error}`}</p>
+        </Banner>
+      )}
+    </BlockStack>
   );
 }
