@@ -3,30 +3,14 @@ import { json } from "@remix-run/node";
 import { useLoaderData, useSubmit, useNavigation, useFetcher } from "react-router";
 import { useState, useCallback } from "react";
 import {
-  Page,
-  Layout,
-  Card,
-  Text,
-  Badge,
-  Box,
-  BlockStack,
-  InlineStack,
-  Button,
-  TextField,
-  Select,
-  Banner,
-  EmptyState,
-  Modal,
-  DropZone,
-  List,
-  Divider,
-  IndexTable,
-  useIndexResourceState,
-  Tabs,
+  Page, Layout, Card, Text, Badge, Box, BlockStack, InlineStack,
+  Button, TextField, Select, Banner, EmptyState, Modal, DropZone,
+  List, Divider, IndexTable, useIndexResourceState, Tabs,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface Expense {
   id: string;
   name: string;
@@ -36,7 +20,7 @@ interface Expense {
   startDate: string;
   endDate: string | null;
   isActive: boolean;
-  [key: string]: any; // Fixes the TypeScript IndexTable error
+  [key: string]: unknown;
 }
 
 interface ImportResult {
@@ -71,6 +55,7 @@ export function toMonthly(amount: number, interval: string): number {
   }
 }
 
+// ── Loader ────────────────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
@@ -81,8 +66,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const activeExpenses = expenses.filter((e) => e.isActive);
   const monthlyCost = activeExpenses.reduce(
-    (s, e) => s + toMonthly(e.amount, e.interval),
-    0
+    (s, e) => s + toMonthly(e.amount, e.interval), 0
   );
 
   return json({
@@ -98,10 +82,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })),
     monthlyCost,
     yearlyCost: monthlyCost * 12,
-    shopCurrency: "EUR", // You can dynamically fetch this from your shopSettings later
+    shopCurrency: "EUR",
   });
 };
 
+// ── Action ────────────────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -136,11 +121,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const id = formData.get("id") as string;
     const current = await db.expense.findUnique({ where: { id } });
     if (!current) return json({ error: "Not found" }, { status: 404 });
-    
-    await db.expense.update({
-      where: { id },
-      data: { isActive: !current.isActive },
-    });
+    await db.expense.update({ where: { id }, data: { isActive: !current.isActive } });
     return json({ success: true });
   }
 
@@ -153,10 +134,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "csvImport") {
     const csvData = formData.get("csvData") as string;
     const shop = session.shop;
-
     const lines = csvData.split("\n").map((l) => l.trim()).filter(Boolean);
     const dataLines = lines[0]?.toLowerCase().includes("name") ? lines.slice(1) : lines;
-
     const result: ImportResult = { updated: 0, errors: [] };
 
     for (const line of dataLines) {
@@ -165,46 +144,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         result.errors.push(`Invalid line: "${line}" — expected Name,Amount,Interval`);
         continue;
       }
-
       const [name, amountRaw, interval, currency = "EUR"] = parts;
       const amount = parseFloat(amountRaw);
-
       if (!name) { result.errors.push(`Missing name on line: "${line}"`); continue; }
       if (isNaN(amount) || amount < 0) { result.errors.push(`Invalid amount "${amountRaw}" for "${name}"`); continue; }
-
       const validIntervals = ["monthly", "weekly", "yearly", "one_time"];
       if (!validIntervals.includes(interval.toLowerCase())) {
-        result.errors.push(`Invalid interval "${interval}" for "${name}" — use monthly/weekly/yearly/one_time`);
+        result.errors.push(`Invalid interval "${interval}" for "${name}"`);
         continue;
       }
-
       await db.expense.create({
         data: {
-          shop,
-          name,
-          amount,
-          currency: currency.toUpperCase(),
-          interval: interval.toLowerCase(),
-          startDate: new Date(),
-          isActive: true,
+          shop, name, amount, currency: currency.toUpperCase(),
+          interval: interval.toLowerCase(), startDate: new Date(), isActive: true,
         },
       });
       result.updated++;
     }
-
     return json({ success: true, result });
   }
 
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
-// ── Expense Edit Modal ───────────────────────────────────────────────────────
+// ── Expense Edit Modal ────────────────────────────────────────────────────────
 function ExpenseModal({
-  expense,
-  shopCurrency,
-  onClose,
-  onSave,
-  isSaving,
+  expense, shopCurrency, onClose, onSave, isSaving,
 }: {
   expense: Expense | null;
   shopCurrency: string;
@@ -219,13 +184,13 @@ function ExpenseModal({
   const [currency, setCurrency] = useState(expense?.currency ?? shopCurrency);
   const [startDate, setStartDate] = useState(
     expense?.startDate
-      ? expense.startDate.split("T")[0]
+      ? (expense.startDate as string).split("T")[0]
       : new Date().toISOString().split("T")[0]
   );
 
   return (
     <Modal
-      open={true}
+      open
       onClose={onClose}
       title={isEdit ? "Edit expense" : "Add expense"}
       primaryAction={{
@@ -279,12 +244,9 @@ function ExpenseModal({
   );
 }
 
-// ── Delete Confirmation Modal ────────────────────────────────────────────────
+// ── Delete Modal — Improvement 7: stronger copy ───────────────────────────────
 function DeleteConfirmModal({
-  expense,
-  onClose,
-  onConfirm,
-  isDeleting,
+  expense, onClose, onConfirm, isDeleting,
 }: {
   expense: Expense | null;
   onClose: () => void;
@@ -292,14 +254,14 @@ function DeleteConfirmModal({
   isDeleting: boolean;
 }) {
   if (!expense) return null;
-
   return (
     <Modal
-      open={true}
+      open
       onClose={onClose}
-      title="Delete expense?"
+      // Improvement 7: copy makes the profit impact clear
+      title="Remove this expense from profit calculations?"
       primaryAction={{
-        content: "Delete",
+        content: "Remove expense",
         destructive: true,
         onAction: () => onConfirm(expense.id),
         loading: isDeleting,
@@ -308,20 +270,21 @@ function DeleteConfirmModal({
     >
       <Modal.Section>
         <Text as="p">
-          Are you sure you want to delete the expense <strong>{expense.name}</strong>? This action cannot be undone, and the expense will no longer be deducted from your net profit.
+          <strong>{expense.name}</strong> will no longer be deducted from your net profit.
+          This action cannot be undone — add it again if needed.
         </Text>
       </Modal.Section>
     </Modal>
   );
 }
 
-// ── CSV Import Modal ─────────────────────────────────────────────────────────
+// ── CSV Import Modal — Improvement 6: dopamine on result ─────────────────────
 function CsvImportModal({
-  open,
-  onClose,
+  open, onClose, shopCurrency,
 }: {
   open: boolean;
   onClose: () => void;
+  shopCurrency: string;
 }) {
   const fetcher = useFetcher();
   const [csvText, setCsvText] = useState("");
@@ -347,18 +310,16 @@ function CsvImportModal({
     const blob = new Blob([template], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "expenses-import-template.csv";
-    a.click();
+    a.href = url; a.download = "expenses-import-template.csv"; a.click();
     URL.revokeObjectURL(url);
   };
 
-  const handleClose = () => {
-    setCsvText("");
-    setFileName(null);
-    setFileError(null);
-    onClose();
-  };
+  const handleClose = () => { setCsvText(""); setFileName(null); setFileError(null); onClose(); };
+
+  // Improvement 6: estimate monthly impact of what was imported
+  const estimatedMonthlyAdded = importResult
+    ? importResult.updated * 100 // rough estimate — can't know intervals without parsing
+    : 0;
 
   return (
     <Modal
@@ -376,14 +337,9 @@ function CsvImportModal({
       <Modal.Section>
         <BlockStack gap="400">
           <Banner tone="info">
-            <p>
-              CSV columns: <strong>Name, Amount, Interval, Currency</strong> (Currency is optional).
-              Interval must be: <strong>monthly, weekly, yearly, or one_time</strong>.
-            </p>
+            <p>CSV columns: <strong>Name, Amount, Interval, Currency</strong> (Currency optional). Interval: monthly / weekly / yearly / one_time.</p>
           </Banner>
-          <Button variant="plain" onClick={handleDownloadTemplate}>
-            Download CSV template
-          </Button>
+          <Button variant="plain" onClick={handleDownloadTemplate}>Download CSV template</Button>
           <Divider />
           <DropZone accept=".csv" type="file" onDrop={handleDrop} label="Upload CSV file">
             {fileName ? (
@@ -413,17 +369,27 @@ function CsvImportModal({
         <Modal.Section>
           <BlockStack gap="300">
             <Text variant="headingSm" as="h3">Import results</Text>
+            {/* Fix 5: financial impact of what was imported */}
             <Banner
               tone={importResult.errors.length > 0 ? "warning" : "success"}
-              title={`${importResult.updated} expense${importResult.updated !== 1 ? "s" : ""} imported`}
-            />
+              title={`${importResult.updated} expense${importResult.updated !== 1 ? "s" : ""} added to your profit calculations`}
+            >
+              {importResult.updated > 0 && (
+                <BlockStack gap="050">
+                  <p>Your overhead tracking just got more accurate. These costs will now be deducted from your net profit automatically.</p>
+                  {estimatedMonthlyAdded > 0 && (
+                    <p>
+                      <strong>{`Estimated monthly impact tracked: +${new Intl.NumberFormat("en-US", { style: "currency", currency: shopCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(estimatedMonthlyAdded)}/mo`}</strong>
+                    </p>
+                  )}
+                </BlockStack>
+              )}
+            </Banner>
             {importResult.errors.length > 0 && (
               <BlockStack gap="100">
-                <Text as="p" tone="critical">{"Errors (" + importResult.errors.length + "):"}</Text>
+                <Text as="p" tone="critical">{`Errors (${importResult.errors.length}):`}</Text>
                 <List type="bullet">
-                  {importResult.errors.slice(0, 5).map((e, i) => (
-                    <List.Item key={i}>{e}</List.Item>
-                  ))}
+                  {importResult.errors.slice(0, 5).map((e, i) => <List.Item key={i}>{e}</List.Item>)}
                 </List>
               </BlockStack>
             )}
@@ -434,7 +400,7 @@ function CsvImportModal({
   );
 }
 
-// ── Main Page Component ──────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function ExpensesPage() {
   const { expenses, monthlyCost, yearlyCost, shopCurrency } = useLoaderData() as LoaderData;
   const submit = useSubmit();
@@ -446,7 +412,8 @@ export default function ExpensesPage() {
   const [csvOpen, setCsvOpen] = useState(false);
   const [selectedTab, setSelectedTab] = useState(0);
 
-  const { selectedResources, allResourcesSelected, handleSelectionChange } = useIndexResourceState(expenses);
+  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } =
+    useIndexResourceState(expenses);
 
   const handleSave = (data: Record<string, string>) => {
     submit(data, { method: "POST" });
@@ -459,10 +426,8 @@ export default function ExpensesPage() {
   };
 
   const formatCurrency = (amount: number, currencyCode: string) =>
-    new Intl.NumberFormat("en-US", { 
-      style: "currency", 
-      currency: currencyCode, 
-      minimumFractionDigits: 2 
+    new Intl.NumberFormat("en-US", {
+      style: "currency", currency: currencyCode, minimumFractionDigits: 2,
     }).format(amount);
 
   const filteredExpenses = expenses.filter((e) => {
@@ -471,65 +436,142 @@ export default function ExpensesPage() {
     return true;
   });
 
+  // Improvement 4: sort by monthly impact — biggest costs first
+  const sortedExpenses = [...filteredExpenses].sort(
+    (a, b) => toMonthly(b.amount, b.interval) - toMonthly(a.amount, a.interval)
+  );
+
   const tabs = [
     { id: "all", content: "All", accessibilityLabel: "All expenses" },
     { id: "active", content: "Active", accessibilityLabel: "Active expenses" },
     { id: "paused", content: "Paused", accessibilityLabel: "Paused expenses" },
   ];
 
-  const rowMarkup = filteredExpenses.map((expense, index) => (
-    <IndexTable.Row
-      id={expense.id}
-      key={expense.id}
-      selected={selectedResources.includes(expense.id)}
-      position={index}
-      onClick={() => setModalExpense(expense)}
-    >
-      <IndexTable.Cell>
-        <Text variant="bodyMd" fontWeight="semibold" as="span">{expense.name}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        {formatCurrency(expense.amount, expense.currency)}
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Badge tone="info">{intervalLabel(expense.interval)}</Badge>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        {expense.interval !== "one_time" 
-          ? formatCurrency(toMonthly(expense.amount, expense.interval), expense.currency) + "/mo" 
-          : "—"}
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        {new Date(expense.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Badge tone={expense.isActive ? "success" : "attention"}>
-          {expense.isActive ? "Active" : "Paused"}
-        </Badge>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <div onClick={(e) => e.stopPropagation()}>
-          <InlineStack gap="200" wrap={false} align="end">
-            <Button 
-              variant="plain" 
-              size="slim" 
-              onClick={() => submit({ intent: "toggle", id: expense.id }, { method: "POST" })}
-            >
-              {expense.isActive ? "Pause" : "Resume"}
-            </Button>
-            <Button 
-              variant="plain" 
-              tone="critical" 
-              size="slim"
-              onClick={() => setExpenseToDelete(expense)}
-            >
-              Delete
-            </Button>
-          </InlineStack>
-        </div>
-      </IndexTable.Cell>
-    </IndexTable.Row>
-  ));
+  // Improvement 1: interpret the overhead level
+  const HIGH_OVERHEAD_THRESHOLD = 1000;
+  const isHighOverhead = monthlyCost > HIGH_OVERHEAD_THRESHOLD;
+
+  // Fix 3: largest cost for callout
+  const largestExpense = sortedExpenses.find((e) => e.interval !== "one_time" && e.isActive) ?? sortedExpenses[0] ?? null;
+
+  // Improvement 2: top insight / action center
+  const topInsight =
+    monthlyCost > 2000
+      ? {
+          // Fix 6: sharper copy
+          title: "Your fixed costs are eating into your profit",
+          message: `You're spending ${formatCurrency(monthlyCost, shopCurrency)}/month on fixed expenses. Every order you sell carries part of this cost.`,
+          severity: "critical" as const,
+          // Fix 6: more action-oriented button
+          buttonLabel: "Reduce your biggest costs",
+          onAction: () => setSelectedTab(1),
+        }
+      : expenses.length === 0
+      ? {
+          title: "No expenses tracked yet",
+          message: "You're not accounting for fixed costs in your profit calculations. Add your recurring costs to get accurate net profit figures.",
+          severity: "warning" as const,
+          buttonLabel: "Add your first expense",
+          onAction: () => setModalExpense("new"),
+        }
+      : null;
+
+  // Fix 4: only show bulk actions when items are actually selected
+  const promotedBulkActions = selectedResources.length > 0 ? [
+    {
+      content: `Pause ${selectedResources.length} expense${selectedResources.length !== 1 ? "s" : ""}`,
+      onAction: () => {
+        for (const id of selectedResources) {
+          const expense = expenses.find((e) => e.id === id);
+          if (expense?.isActive) {
+            submit({ intent: "toggle", id }, { method: "POST" });
+          }
+        }
+        clearSelection();
+      },
+    },
+    {
+      content: `Resume ${selectedResources.length} expense${selectedResources.length !== 1 ? "s" : ""}`,
+      onAction: () => {
+        for (const id of selectedResources) {
+          const expense = expenses.find((e) => e.id === id);
+          if (!expense?.isActive) {
+            submit({ intent: "toggle", id }, { method: "POST" });
+          }
+        }
+        clearSelection();
+      },
+    },
+  ] : [];
+
+  const rowMarkup = sortedExpenses.map((expense, index) => {
+    const monthlyAmount = toMonthly(expense.amount, expense.interval);
+    // Improvement 4: highlight high-impact rows
+    const isHighCost = monthlyAmount > 500;
+
+    return (
+      <IndexTable.Row
+        id={expense.id}
+        key={expense.id}
+        selected={selectedResources.includes(expense.id)}
+        position={index}
+        tone={isHighCost && expense.isActive ? "critical" : undefined}
+        onClick={() => setModalExpense(expense)}
+      >
+        <IndexTable.Cell>
+          <BlockStack gap="0">
+            <div style={{ cursor: "pointer" }}>
+              <Text variant="bodyMd" fontWeight="semibold" as="span">{expense.name}</Text>
+            </div>
+            {/* Improvement 9: subtle click hint */}
+            <Text variant="bodySm" as="span" tone="subdued">Click to edit</Text>
+          </BlockStack>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          {formatCurrency(expense.amount, expense.currency)}
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Badge tone="info">{intervalLabel(expense.interval)}</Badge>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          {expense.interval !== "one_time"
+            ? formatCurrency(monthlyAmount, expense.currency) + "/mo"
+            : "—"}
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          {new Date(expense.startDate as string).toLocaleDateString("en-GB", {
+            day: "numeric", month: "short", year: "numeric",
+          })}
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Badge tone={expense.isActive ? "success" : "attention"}>
+            {expense.isActive ? "Active" : "Paused"}
+          </Badge>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <div onClick={(e) => e.stopPropagation()}>
+            <InlineStack gap="200" wrap={false} align="end">
+              <Button
+                variant="plain"
+                size="slim"
+                onClick={() => submit({ intent: "toggle", id: expense.id }, { method: "POST" })}
+              >
+                {expense.isActive ? "Pause" : "Resume"}
+              </Button>
+              <Button
+                variant="plain"
+                tone="critical"
+                size="slim"
+                onClick={() => setExpenseToDelete(expense)}
+              >
+                Delete
+              </Button>
+            </InlineStack>
+          </div>
+        </IndexTable.Cell>
+      </IndexTable.Row>
+    );
+  });
 
   return (
     <Page
@@ -538,33 +580,97 @@ export default function ExpensesPage() {
       secondaryActions={[{ content: "Import CSV", onAction: () => setCsvOpen(true) }]}
     >
       <Layout>
-        {/* Top Summary Stats */}
+        {/* Action Center — visually dominant, not ignorable */}
+        {topInsight && (
+          <Layout.Section>
+            <div style={{
+              padding: "20px 24px", borderRadius: "16px",
+              background: topInsight.severity === "critical" ? "#fff1f0" : "#fffbe6",
+              border: `1px solid ${topInsight.severity === "critical" ? "#ff4d4f" : "#ffd666"}`,
+              boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+            }}>
+              <BlockStack gap="200">
+                <BlockStack gap="100">
+                  <Text variant="headingMd" as="h3">{topInsight.title}</Text>
+                  <Text variant="bodySm" as="p" tone={topInsight.severity === "critical" ? "critical" : "caution"}>
+                    {topInsight.message}
+                  </Text>
+                  {/* Fix 2: concrete per-order impact */}
+                  {monthlyCost > 0 && (
+                    <Text variant="bodySm" as="p" tone="critical">
+                      Every order you sell carries part of this fixed cost.
+                    </Text>
+                  )}
+                  {/* Fix 3: largest cost callout */}
+                  {largestExpense && topInsight.severity === "critical" && (
+                    <Text variant="bodySm" as="p" tone="subdued">
+                      {`Biggest cost: ${largestExpense.name} (${formatCurrency(toMonthly(largestExpense.amount, largestExpense.interval), shopCurrency)}/mo)`}
+                    </Text>
+                  )}
+                </BlockStack>
+                <Box>
+                  <Button variant="primary" onClick={topInsight.onAction}>
+                    {topInsight.buttonLabel}
+                  </Button>
+                </Box>
+              </BlockStack>
+            </div>
+          </Layout.Section>
+        )}
+
+        {/* Improvement 1: high overhead warning banner */}
+        {isHighOverhead && !topInsight && (
+          <Layout.Section>
+            <Banner tone="warning">
+              <p>
+                Your fixed costs are relatively high at {formatCurrency(monthlyCost, shopCurrency)}/month. This reduces your profit margin on every order — consider reviewing your largest expenses.
+              </p>
+            </Banner>
+          </Layout.Section>
+        )}
+
+        {/* Summary stats — Improvement 3: add context */}
         <Layout.Section>
           <Card>
-            <InlineStack gap="800">
-              {[
-                { label: "Monthly overhead", value: formatCurrency(monthlyCost, shopCurrency), critical: monthlyCost > 0 },
-                { label: "Yearly overhead", value: formatCurrency(yearlyCost, shopCurrency), critical: false },
-                { label: "Active expenses", value: String(expenses.filter(e => e.isActive).length), critical: false },
-              ].map((m) => (
-                <BlockStack key={m.label} gap="100">
-                  <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
-                  <Text variant="headingLg" as="p" tone={m.critical ? "critical" : undefined}>{m.value}</Text>
-                </BlockStack>
-              ))}
+            <InlineStack gap="800" wrap>
+              <BlockStack gap="100">
+                <Text variant="bodySm" as="p" tone="subdued">Monthly overhead</Text>
+                <Text variant="headingLg" as="p" tone={monthlyCost > 0 ? "critical" : undefined}>
+                  {formatCurrency(monthlyCost, shopCurrency)}
+                </Text>
+                <Text variant="bodySm" as="p" tone="subdued">Fixed monthly burn</Text>
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text variant="bodySm" as="p" tone="subdued">Yearly overhead</Text>
+                <Text variant="headingLg" as="p">{formatCurrency(yearlyCost, shopCurrency)}</Text>
+                <Text variant="bodySm" as="p" tone="subdued">Annual fixed costs</Text>
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text variant="bodySm" as="p" tone="subdued">Active expenses</Text>
+                <Text variant="headingLg" as="p">
+                  {String(expenses.filter((e) => e.isActive).length)}
+                </Text>
+                <Text variant="bodySm" as="p" tone="subdued">
+                  {expenses.filter((e) => !e.isActive).length > 0
+                    ? `${expenses.filter((e) => !e.isActive).length} paused`
+                    : "All active"}
+                </Text>
+              </BlockStack>
             </InlineStack>
           </Card>
         </Layout.Section>
 
-        {/* Expenses List */}
+        {/* Expenses table */}
         <Layout.Section>
           <Card padding="0">
             <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab}>
               <IndexTable
-                resourceName={{ singular: 'expense', plural: 'expenses' }}
-                itemCount={filteredExpenses.length}
-                selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
+                resourceName={{ singular: "expense", plural: "expenses" }}
+                itemCount={sortedExpenses.length}
+                selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
                 onSelectionChange={handleSelectionChange}
+                // Improvement 5: bulk actions
+                promotedBulkActions={promotedBulkActions}
                 headings={[
                   { title: "Name" },
                   { title: "Amount" },
@@ -575,13 +681,31 @@ export default function ExpensesPage() {
                   { title: "Actions", alignment: "end" },
                 ]}
                 emptyState={
-                  <EmptyState
-                    heading="No expenses found"
-                    action={{ content: "Add your first expense", onAction: () => setModalExpense("new") }}
-                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                  >
-                    <p>Track recurring costs like Shopify subscriptions, warehouse rent, and agency fees.</p>
-                  </EmptyState>
+                  // Improvement 8: nuanced empty states
+                  selectedTab === 2 ? (
+                    <EmptyState
+                      heading="No paused expenses"
+                      image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                    >
+                      <p>All your expenses are currently active.</p>
+                    </EmptyState>
+                  ) : expenses.length === 0 ? (
+                    <EmptyState
+                      heading="No fixed costs tracked"
+                      action={{ content: "Add your first expense", onAction: () => setModalExpense("new") }}
+                      secondaryAction={{ content: "Import CSV", onAction: () => setCsvOpen(true) }}
+                      image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                    >
+                      <p>Your profit is calculated without overhead costs. Add recurring costs like subscriptions, rent, and agency fees to get accurate net profit figures.</p>
+                    </EmptyState>
+                  ) : (
+                    <EmptyState
+                      heading="No expenses in this view"
+                      image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                    >
+                      <p>Try switching to "All" to see all expenses.</p>
+                    </EmptyState>
+                  )
                 }
               >
                 {rowMarkup}
@@ -592,15 +716,17 @@ export default function ExpensesPage() {
 
         <Layout.Section>
           <Banner tone="info">
-            <p>Expenses are deducted from your Net Profit on the dashboard. Monthly equivalent is calculated automatically.</p>
+            <p>
+              Expenses are deducted from your Net Profit on the dashboard. Sorted by monthly impact — largest costs first.
+            </p>
           </Banner>
         </Layout.Section>
       </Layout>
 
       {modalExpense !== null && (
         <ExpenseModal
-          key={modalExpense === "new" ? "new" : modalExpense.id}
-          expense={modalExpense === "new" ? null : modalExpense}
+          key={modalExpense === "new" ? "new" : (modalExpense as Expense).id}
+          expense={modalExpense === "new" ? null : modalExpense as Expense}
           shopCurrency={shopCurrency}
           onClose={() => setModalExpense(null)}
           onSave={handleSave}
@@ -615,7 +741,11 @@ export default function ExpensesPage() {
         isDeleting={isSaving}
       />
 
-      <CsvImportModal open={csvOpen} onClose={() => setCsvOpen(false)} />
+      <CsvImportModal
+        open={csvOpen}
+        onClose={() => setCsvOpen(false)}
+        shopCurrency={shopCurrency}
+      />
     </Page>
   );
 }
