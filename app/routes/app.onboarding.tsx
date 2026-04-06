@@ -558,7 +558,13 @@ export default function Onboarding() {
                       size="slim"
                       onClick={() => {
                         try { sessionStorage.setItem("cp_onboarding_step", "1"); } catch {}
-                        window.open("/app/cogs", "_blank");
+                        // Must use full Shopify admin URL — /app/cogs alone loses embedded context
+                        const shopDomain = ads.shop.replace(".myshopify.com", "");
+                        const appHandle = "profit-tracker-app-5";
+                        window.open(
+                          `https://admin.shopify.com/store/${shopDomain}/apps/${appHandle}/app/cogs`,
+                          "_blank"
+                        );
                       }}
                     >
                       Open COGS Configuration in new tab ↗
