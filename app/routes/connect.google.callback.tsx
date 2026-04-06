@@ -127,7 +127,7 @@ async function syncGoogleSpend(shop: string, accessToken: string, customerId: st
       clicks: existing.clicks + (row.metrics?.clicks ?? 0),
     });
   }
-
+// Test
   for (const [date, metrics] of byDate) {
     await db.adSpend.upsert({
       where: { shop_platform_date: { shop, platform: "google", date } },
