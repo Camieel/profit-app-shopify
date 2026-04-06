@@ -303,7 +303,14 @@ export default function Onboarding() {
 
   const fetcher = useFetcher();
   const { revalidate } = useRevalidator();
-  const [step, setStep] = useState(0);
+  // Persist step in sessionStorage so navigating away and back doesn't reset
+  const [step, setStep] = useState(() => {
+    try { return parseInt(sessionStorage.getItem("cp_onboarding_step") ?? "0", 10) || 0; } catch { return 0; }
+  });
+  const goToStep = (s: number) => {
+    try { sessionStorage.setItem("cp_onboarding_step", String(s)); } catch {}
+    setStep(s);
+  };
 
   useEffect(() => {
     const onFocus = () => { if (step === 4) revalidate(); };
@@ -335,7 +342,7 @@ export default function Onboarding() {
       { intent: "saveFees", paymentGateway, transactionFeePercent: feePercent, transactionFeeFixed: feeFixed, shopifyExtraFeePercent: extraFee },
       { method: "POST" }
     );
-    setStep(3);
+    goToStep(3);
   };
 
   const handleSaveAlerts = () => {
@@ -343,7 +350,7 @@ export default function Onboarding() {
       { intent: "saveAlerts", alertEnabled: String(alertEnabled), alertMarginThreshold: alertMargin, holdEnabled: String(holdEnabled), holdMarginThreshold: holdMargin, alertEmail },
       { method: "POST" }
     );
-    setStep(4);
+    goToStep(4);
   };
 
   const handleConnectMeta = () => {
@@ -458,7 +465,7 @@ export default function Onboarding() {
             <Divider />
 
             <InlineStack align="end">
-              <Button variant="primary" onClick={() => setStep(1)}>
+              <Button variant="primary" onClick={() => goToStep(1)}>
                 {hasLossData ? "Fix this now →" : "Get started →"}
               </Button>
             </InlineStack>
@@ -549,9 +556,12 @@ export default function Onboarding() {
                     </BlockStack>
                     <Button
                       size="slim"
-                      onClick={() => fetcher.submit({ intent: "completeToCogs" }, { method: "POST" })}
+                      onClick={() => {
+                        try { sessionStorage.setItem("cp_onboarding_step", "1"); } catch {}
+                        window.open("/app/cogs", "_blank");
+                      }}
                     >
-                      Finish setup & go to COGS Configuration →
+                      Open COGS Configuration in new tab ↗
                     </Button>
                   </BlockStack>
                 </div>
@@ -564,8 +574,8 @@ export default function Onboarding() {
 
             <Divider />
             <InlineStack align="space-between">
-              <Button onClick={() => setStep(0)} disabled={isSaving}>Back</Button>
-              <Button variant="primary" onClick={() => setStep(2)}>
+              <Button onClick={() => goToStep(0)} disabled={isSaving}>Back</Button>
+              <Button variant="primary" onClick={() => goToStep(2)}>
                 {allGood ? "Next" : "Continue anyway →"}
               </Button>
             </InlineStack>
@@ -580,8 +590,9 @@ export default function Onboarding() {
     // Impact calculation — show what this means financially
     const feePercentNum = parseFloat(feePercent) || 2.9;
     const feeFixedNum = parseFloat(feeFixed) || 0.3;
+    const extraFeeNum = parseFloat(extraFee) || 0;
     const avgOrderValue = 75; // reasonable assumption for preview
-    const avgFeePerOrder = (avgOrderValue * feePercentNum / 100) + feeFixedNum;
+    const avgFeePerOrder = (avgOrderValue * (feePercentNum + extraFeeNum) / 100) + feeFixedNum;
     const monthlyEstimate = avgFeePerOrder * 200; // 200 orders/mo assumption
 
     return (
@@ -659,7 +670,7 @@ export default function Onboarding() {
 
             <Divider />
             <InlineStack align="space-between">
-              <Button onClick={() => setStep(1)} disabled={isSaving}>Back</Button>
+              <Button onClick={() => goToStep(1)} disabled={isSaving}>Back</Button>
               <Button variant="primary" onClick={handleSaveFees} loading={isSaving}>Save & continue</Button>
             </InlineStack>
           </BlockStack>
@@ -771,7 +782,7 @@ export default function Onboarding() {
 
             <Divider />
             <InlineStack align="space-between">
-              <Button onClick={() => setStep(2)} disabled={isSaving}>Back</Button>
+              <Button onClick={() => goToStep(2)} disabled={isSaving}>Back</Button>
               <Button variant="primary" onClick={handleSaveAlerts} loading={isSaving}>Save & continue</Button>
             </InlineStack>
           </BlockStack>
@@ -842,8 +853,8 @@ export default function Onboarding() {
 
             <Divider />
             <InlineStack align="space-between">
-              <Button onClick={() => setStep(3)} disabled={isSaving}>Back</Button>
-              <Button variant="primary" onClick={() => setStep(5)} loading={isSaving}>{nextLabel}</Button>
+              <Button onClick={() => goToStep(3)} disabled={isSaving}>Back</Button>
+              <Button variant="primary" onClick={() => goToStep(5)} loading={isSaving}>{nextLabel}</Button>
             </InlineStack>
           </BlockStack>
         </Card>
@@ -901,7 +912,7 @@ export default function Onboarding() {
           <Form method="POST">
             <input type="hidden" name="intent" value="complete" />
             <InlineStack align="space-between">
-              <Button onClick={() => setStep(4)} disabled={isSaving}>Back</Button>
+              <Button onClick={() => goToStep(4)} disabled={isSaving}>Back</Button>
               {/* Dynamic CTA based on whether there's urgent action */}
               <Button variant="primary" submit loading={isSaving}>
                 {unprofitableOrderCount > 0

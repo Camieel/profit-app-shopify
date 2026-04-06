@@ -1,6 +1,7 @@
 // app/routes/connect.success.tsx
 // Shown in the popup tab after successful OAuth.
-// Reloads the parent window and closes itself.
+// Does NOT reload parent — reloading resets React state (e.g. onboarding step).
+// User sees confirmation and closes manually or it auto-closes.
 
 export default function ConnectSuccess() {
   return (
@@ -22,15 +23,14 @@ export default function ConnectSuccess() {
           }
           .icon { font-size: 48px; margin-bottom: 16px; }
           h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
-          p { font-size: 14px; color: #6b7280; line-height: 1.5; }
+          p { font-size: 14px; color: #6b7280; line-height: 1.5; margin-bottom: 20px; }
+          .hint { font-size: 13px; color: #9ca3af; }
         `}</style>
         <script dangerouslySetInnerHTML={{ __html: `
-          try {
-            if (window.opener && !window.opener.closed) {
-              window.opener.location.reload();
-            }
-          } catch(e) {}
-          setTimeout(function() { window.close(); }, 1500);
+          // Close popup after short delay — parent window is NOT reloaded
+          // to preserve React state (e.g. onboarding step).
+          // User clicks "Refresh connection status" in the parent instead.
+          setTimeout(function() { window.close(); }, 2000);
         `}} />
       </head>
       <body>
@@ -38,6 +38,7 @@ export default function ConnectSuccess() {
           <div className="icon">✅</div>
           <h1>Connected successfully</h1>
           <p>This window will close automatically.</p>
+          <p className="hint">Go back to the app and click<br/><strong>"Refresh connection status"</strong> to confirm.</p>
         </div>
       </body>
     </html>

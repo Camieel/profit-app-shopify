@@ -35,6 +35,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }),
     });
+    // Check content-type before parsing — Google returns HTML on some errors
+    const tokenContentType = tokenRes.headers.get("content-type") ?? "";
+    if (!tokenContentType.includes("application/json")) {
+      const rawBody = await tokenRes.text();
+      console.error("[Google OAuth] Token endpoint returned non-JSON:", rawBody.slice(0, 200));
+      return redirect("/connect/error?error=google_token_failed");
+    }
     const tokenData = (await tokenRes.json()) as any;
 
     if (!tokenData.access_token) {
@@ -49,7 +56,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       "https://googleads.googleapis.com/v17/customers:listAccessibleCustomers",
       { headers: { Authorization: `Bearer ${accessToken}`, "developer-token": developerToken } }
     );
+    const accountsContentType = accountsRes.headers.get("content-type") ?? "";
+    if (!accountsContentType.includes("application/json")) {
+      const rawBody = await accountsRes.text();
+      console.error("[Google OAuth] Accounts endpoint returned non-JSON:", rawBody.slice(0, 200));
+      return redirect("/connect/error?error=google_no_accounts");
+    }
     const accountsData = (await accountsRes.json()) as any;
+    console.log("[Google OAuth] Accounts response:", JSON.stringify(accountsData).slice(0, 300));
     const resourceNames: string[] = accountsData.resourceNames ?? [];
 
     if (resourceNames.length === 0) {
