@@ -3,13 +3,14 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useNavigation, useSearchParams, useNavigate } from "react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Page, Layout, Card, Text, Badge, Box, BlockStack, InlineStack,
   Button, TextField, DataTable, EmptyState, Banner,
   SkeletonPage, SkeletonBodyText, InlineGrid, Select,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
 import db from "../db.server";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -244,45 +245,6 @@ function trendArrow(curr: number, prev: number) {
 }
 
 // ── Date presets ──────────────────────────────────────────────────────────────
-function DatePresets({ dateFrom, dateTo, onUpdate }: {
-  dateFrom: string;
-  dateTo: string;
-  onUpdate: (from: string, to: string) => void;
-}) {
-  const today = new Date();
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
-  const presets = [
-    { label: "7 days", from: fmt(new Date(today.getTime() - 7 * 86400000)), to: fmt(today) },
-    { label: "30 days", from: fmt(new Date(today.getTime() - 30 * 86400000)), to: fmt(today) },
-    { label: "This month", from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmt(today) },
-    { label: "Last month", from: fmt(new Date(today.getFullYear(), today.getMonth() - 1, 1)), to: fmt(new Date(today.getFullYear(), today.getMonth(), 0)) },
-    { label: "90 days", from: fmt(new Date(today.getTime() - 90 * 86400000)), to: fmt(today) },
-  ];
-  return (
-    <Card>
-      <InlineStack gap="200" wrap align="space-between">
-        <InlineStack gap="200" wrap>
-          {presets.map((p) => {
-            const active = dateFrom === p.from && dateTo === p.to;
-            return (
-              <Button
-                key={p.label}
-                size="slim"
-                variant={active ? "primary" : "plain"}
-                onClick={() => onUpdate(p.from, p.to)}
-              >
-                {p.label}
-              </Button>
-            );
-          })}
-        </InlineStack>
-        <Text variant="bodySm" as="p" tone="subdued">
-          {`${dateFrom} → ${dateTo}`}
-        </Text>
-      </InlineStack>
-    </Card>
-  );
-}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function ProductsPage() {
@@ -290,6 +252,21 @@ export default function ProductsPage() {
     useLoaderData() as LoaderData;
 
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Sync from localStorage on first load if no URL date params
+  useEffect(() => {
+    const hasDateParam = searchParams.has("from") || searchParams.has("to");
+    if (!hasDateParam) {
+      const saved = loadFromStorage();
+      if (saved) {
+        const next = new URLSearchParams(searchParams);
+        next.set("from", saved.from);
+        next.set("to", saved.to);
+        setSearchParams(next, { replace: true });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const navigation = useNavigation();
   const navigate = useNavigate();
   const isLoading = navigation.state === "loading";
@@ -422,7 +399,7 @@ export default function ProductsPage() {
 
         {/* Date presets */}
         <Layout.Section>
-          <DatePresets dateFrom={dateFrom} dateTo={dateTo} onUpdate={updateDateRange} />
+          <DateRangePicker dateFrom={dateFrom} dateTo={dateTo} onUpdate={updateDateRange} />
         </Layout.Section>
 
         {/* Summary KPIs */}
