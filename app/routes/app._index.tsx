@@ -329,22 +329,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const { shop } = session;
 
-  // Redirect to onboarding if not yet completed
-  const onboardingCheck = await db.shopSettings.findUnique({
-    where: { shop },
-    select: { onboardingComplete: true },
-  });
-  if (!onboardingCheck?.onboardingComplete) {
-    return redirect("/app/onboarding");
-  }
-
   const url = new URL(request.url);
   const now = new Date();
 
-  // Date range — affects main KPIs, chart, allocation, leaderboard
+  // Redirect to onboarding if not yet completed.
+  // ?from=onboarding bypasses the check (used when opening COGS from onboarding).
+  const bypassOnboarding = url.searchParams.get("from") === "onboarding";
+  if (!bypassOnboarding) {
+    const onboardingCheck = await db.shopSettings.findUnique({
+      where: { shop },
+      select: { onboardingComplete: true },
+    });
+    if (!onboardingCheck?.onboardingComplete) {
+      return redirect("/app/onboarding");
+    }
+  }
+
+  // Date range — "from" param also used as bypass flag so treat "onboarding" as default
   const defaultTo = toDateStr(now);
   const defaultFrom = toDateStr(new Date(now.getTime() - 30 * 86400000));
-  const dateFrom = url.searchParams.get("from") || defaultFrom;
+  const rawFrom = url.searchParams.get("from");
+  const dateFrom = (rawFrom && rawFrom !== "onboarding") ? rawFrom : defaultFrom;
   const dateTo = url.searchParams.get("to") || defaultTo;
   const since = new Date(dateFrom + "T00:00:00.000Z");
   const until = new Date(dateTo + "T23:59:59.999Z");

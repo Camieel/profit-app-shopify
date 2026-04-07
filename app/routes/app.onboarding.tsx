@@ -560,9 +560,9 @@ export default function Onboarding() {
                         try { sessionStorage.setItem("cp_onboarding_step", "1"); } catch {}
                         // Must use full Shopify admin URL — /app/cogs alone loses embedded context
                         const shopDomain = ads.shop.replace(".myshopify.com", "");
-                        const appHandle = "profit-tracker-app-5";
+                        // Open COGS with ?from=onboarding so dashboard bypass check works
                         window.open(
-                          `https://admin.shopify.com/store/${shopDomain}/apps/${appHandle}/app/cogs`,
+                          `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/cogs?from=onboarding`,
                           "_blank"
                         );
                       }}
