@@ -542,38 +542,22 @@ export default function Onboarding() {
                   </BlockStack>
                 </div>
 
-                {/* What to do */}
                 <div style={{ padding: "14px 16px", borderRadius: "8px", background: "#f9fafb", border: "1px solid #e5e7eb" }}>
                   <BlockStack gap="200">
-                    <Text as="p" variant="bodySm" fontWeight="semibold">How to fix this:</Text>
+                    <Text as="p" variant="bodySm" fontWeight="semibold">How to fix this after completing setup:</Text>
                     <BlockStack gap="100">
                       <Text as="p" variant="bodySm" tone="subdued">
-                        {"Option 1 — Open COGS Configuration and enter costs per variant. You can also bulk import via CSV."}
+                        {"→ Open COGS Configuration in the app sidebar. Enter costs per variant or bulk import via CSV."}
                       </Text>
                       <Text as="p" variant="bodySm" tone="subdued">
-                        {"Option 2 — Set cost prices in Shopify: Products → variant → Cost per item. ClearProfit syncs automatically."}
+                        {"→ Or set cost prices in Shopify: Products → select variant → Cost per item. ClearProfit syncs automatically."}
                       </Text>
                     </BlockStack>
-                    <Button
-                      size="slim"
-                      onClick={() => {
-                        try { sessionStorage.setItem("cp_onboarding_step", "1"); } catch {}
-                        // Must use full Shopify admin URL — /app/cogs alone loses embedded context
-                        const shopDomain = ads.shop.replace(".myshopify.com", "");
-                        // Open COGS with ?from=onboarding so dashboard bypass check works
-                        window.open(
-                          `https://admin.shopify.com/store/${shopDomain}/apps/profit-tracker-app-5/app/cogs?from=onboarding`,
-                          "_blank"
-                        );
-                      }}
-                    >
-                      Open COGS Configuration in new tab ↗
-                    </Button>
                   </BlockStack>
                 </div>
 
                 <Text as="p" variant="bodySm" tone="subdued">
-                  You can continue setup now and fix cost prices later — but profit figures won't be accurate until this is complete.
+                  Continue now — fix cost prices in <strong>COGS Configuration</strong> after setup. Profit figures won't be fully accurate until then.
                 </Text>
               </>
             )}
