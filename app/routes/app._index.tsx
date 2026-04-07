@@ -13,6 +13,7 @@ import {
   ResponsiveContainer, ReferenceDot, ReferenceLine,
 } from "recharts";
 import { authenticate } from "../shopify.server";
+import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
 import db from "../db.server";
 import { toMonthly } from "./app.expenses";
 
@@ -903,78 +904,6 @@ const actionTypeIcons: Record<string, string> = {
   loss_due_to_fees: "💳", loss_mixed: "⚖️", low_margin: "📉", high_expenses: "🏢",
 };
 
-// ── Date presets ──────────────────────────────────────────────────────────────
-function DateRangePicker({ dateFrom, dateTo, onUpdate }: {
-  dateFrom: string;
-  dateTo: string;
-  onUpdate: (from: string, to: string) => void;
-}) {
-  const [from, setFrom] = useState(dateFrom);
-  const [to, setTo] = useState(dateTo);
-
-  const today = new Date();
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
-  const presets = [
-    { label: "Today", from: fmt(today), to: fmt(today) },
-    { label: "Yesterday", from: fmt(new Date(today.getTime() - 86400000)), to: fmt(new Date(today.getTime() - 86400000)) },
-    { label: "7 days", from: fmt(new Date(today.getTime() - 7 * 86400000)), to: fmt(today) },
-    { label: "30 days", from: fmt(new Date(today.getTime() - 30 * 86400000)), to: fmt(today) },
-    { label: "This month", from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmt(today) },
-    { label: "Last month", from: fmt(new Date(today.getFullYear(), today.getMonth() - 1, 1)), to: fmt(new Date(today.getFullYear(), today.getMonth(), 0)) },
-  ];
-
-  const handlePreset = (p: { from: string; to: string }) => {
-    setFrom(p.from);
-    setTo(p.to);
-    onUpdate(p.from, p.to);
-  };
-
-  return (
-    <Card>
-      <BlockStack gap="300">
-        <InlineStack gap="200" wrap>
-          {presets.map((p) => {
-            const active = from === p.from && to === p.to;
-            return (
-              <Button
-                key={p.label}
-                size="slim"
-                variant={active ? "primary" : "plain"}
-                onClick={() => handlePreset(p)}
-              >
-                {p.label}
-              </Button>
-            );
-          })}
-        </InlineStack>
-        <InlineStack gap="300" blockAlign="end" wrap>
-          <TextField
-            label="From"
-            type="date"
-            value={from}
-            onChange={(v) => setFrom(v)}
-            autoComplete="off"
-          />
-          <TextField
-            label="To"
-            type="date"
-            value={to}
-            onChange={(v) => setTo(v)}
-            autoComplete="off"
-          />
-          <Button
-            variant="primary"
-            onClick={() => onUpdate(from, to)}
-            disabled={from === dateFrom && to === dateTo}
-          >
-            Apply
-          </Button>
-        </InlineStack>
-      </BlockStack>
-    </Card>
-  );
-}
-
 // ── Revenue allocation bar ────────────────────────────────────────────────────
 function RevenueAllocationBar({ allocation }: { allocation: RevenueAllocation }) {
   const { revenue, cogs, adSpend, shipping, fees, expenses, profit } = allocation;
@@ -1514,6 +1443,21 @@ export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isLoading = navigation.state === "loading";
   const isSubmitting = navigation.state === "submitting";
+
+  // Sync date range from localStorage on first load if no URL params set
+  useEffect(() => {
+    const hasDateParam = searchParams.has("from") || searchParams.has("to");
+    if (!hasDateParam) {
+      const saved = loadFromStorage();
+      if (saved && (saved.from !== dateFrom || saved.to !== dateTo)) {
+        const next = new URLSearchParams(searchParams);
+        next.set("from", saved.from);
+        next.set("to", saved.to);
+        setSearchParams(next, { replace: true });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [visibleCards, setVisibleCards] = useState<CardId[]>(initialVisibleCards);
   const [customizeOpen, setCustomizeOpen] = useState(false);

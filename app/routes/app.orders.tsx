@@ -3,7 +3,7 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useNavigation, useSearchParams, useNavigate, useLocation, useFetcher } from "react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Page, Layout, Card, DataTable, Text, Badge, Box, InlineStack,
   BlockStack, Tooltip, EmptyState, Button, InlineGrid, TextField,
@@ -11,6 +11,7 @@ import {
 } from "@shopify/polaris";
 import type { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
+import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
 import db from "../db.server";
 
 const PAGE_SIZE = 25;
@@ -406,51 +407,6 @@ function ReleaseHoldButton({ orderId }: { orderId: string }) {
 }
 
 // ── Date presets (new) ────────────────────────────────────────────────────────
-function DatePresets({ onSelect }: {
-  onSelect: (from: string, to: string) => void;
-}) {
-  const today = new Date();
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
-
-  const presets = [
-    { label: "Today", from: fmt(today), to: fmt(today) },
-    {
-      label: "Last 7d",
-      from: fmt(new Date(today.getTime() - 7 * 86400000)),
-      to: fmt(today),
-    },
-    {
-      label: "Last 30d",
-      from: fmt(new Date(today.getTime() - 30 * 86400000)),
-      to: fmt(today),
-    },
-    {
-      label: "This month",
-      from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)),
-      to: fmt(today),
-    },
-    {
-      label: "Last month",
-      from: fmt(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
-      to: fmt(new Date(today.getFullYear(), today.getMonth(), 0)),
-    },
-  ];
-
-  return (
-    <InlineStack gap="200" wrap>
-      {presets.map((p) => (
-        <Button
-          key={p.label}
-          size="slim"
-          variant="plain"
-          onClick={() => onSelect(p.from, p.to)}
-        >
-          {p.label}
-        </Button>
-      ))}
-    </InlineStack>
-  );
-}
 
 // ── Summary card ──────────────────────────────────────────────────────────────
 function SummaryCard({ summary }: { summary: Summary }) {
@@ -867,6 +823,21 @@ export default function OrdersPage() {
   } = useLoaderData() as LoaderData;
 
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Sync from localStorage on first load if no URL date params
+  useEffect(() => {
+    const hasDateParam = searchParams.has("from") || searchParams.has("to");
+    if (!hasDateParam) {
+      const saved = loadFromStorage();
+      if (saved) {
+        const next = new URLSearchParams(searchParams);
+        next.set("from", saved.from);
+        next.set("to", saved.to);
+        setSearchParams(next, { replace: true });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const navigation = useNavigation();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1005,7 +976,7 @@ export default function OrdersPage() {
               </InlineGrid>
 
               {/* New: date presets */}
-              <DatePresets onSelect={updateDateRange} />
+              <DateRangePicker dateFrom={dateFrom} dateTo={dateTo} onUpdate={updateDateRange} />
 
               <InlineGrid columns={{ xs: 1, sm: 4 }} gap="400">
                 <Select
