@@ -1048,12 +1048,13 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
 
   return (
     <div style={{ border: `1px solid ${borderColor}`, borderRadius: "12px", overflow: "hidden" }}>
-      <div style={{ background: headerBg, padding: "20px 24px", borderBottom: visibleItems.length > 0 ? `1px solid ${borderColor}` : undefined }}>
+      {/* ── Header: status + hero insight ── */}
+      <div style={{ background: headerBg, padding: "16px 20px", borderBottom: visibleItems.length > 0 ? `1px solid ${borderColor}` : undefined }}>
         <InlineStack align="space-between" blockAlign="center">
-          <InlineStack gap="300" blockAlign="center">
-            <span style={{ fontSize: "20px" }}>{icon}</span>
+          <InlineStack gap="200" blockAlign="center">
+            <span style={{ fontSize: "18px" }}>{icon}</span>
             <BlockStack gap="0">
-              <Text variant="headingMd" as="h2">
+              <Text variant="headingSm" as="h2">
                 {state === "healthy" ? "You're on track" : state === "critical" ? "Action required" : "Attention needed"}
               </Text>
               <Text variant="bodySm" as="p" tone={state === "critical" ? "critical" : state === "warning" ? "caution" : "subdued"}>
@@ -1061,106 +1062,132 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
               </Text>
             </BlockStack>
           </InlineStack>
-          <Badge tone={state === "critical" ? "critical" : state === "warning" ? "warning" : "success"}>
-            {state === "healthy" ? "Healthy" : state === "critical" ? "Critical" : "Warning"}
-          </Badge>
-        </InlineStack>
-
-        {lossBreakdown && state === "critical" && (
-          <div style={{ marginTop: "16px" }}>
-            <Text variant="bodySm" as="p" tone="subdued" fontWeight="semibold">
-              Loss contribution this week (proportional attribution)
-            </Text>
-            <div style={{ display: "flex", gap: "2px", marginTop: "6px", borderRadius: "4px", overflow: "hidden", height: "8px" }}>
-              {[
-                { key: "ads", color: "#ef4444" },
-                { key: "cogs", color: "#f97316" },
-                { key: "shipping", color: "#eab308" },
-                { key: "fees", color: "#6b7280" },
-              ].map(({ key, color }) => {
-                const val = lossBreakdown[key as keyof typeof lossBreakdown] as number;
-                const pct = lossBreakdown.total > 0 ? (val / lossBreakdown.total) * 100 : 0;
-                return pct > 0 ? (
-                  <div key={key} style={{ width: `${pct}%`, background: color }} title={`${key}: ${pct.toFixed(0)}%`} />
-                ) : null;
-              })}
+          {/* Loss breakdown bar — compact, in header */}
+          {lossBreakdown && state === "critical" && (
+            <div style={{ minWidth: "200px" }}>
+              <div style={{ display: "flex", gap: "2px", borderRadius: "4px", overflow: "hidden", height: "6px", marginBottom: "4px" }}>
+                {[
+                  { key: "ads", color: "#ef4444" },
+                  { key: "cogs", color: "#f97316" },
+                  { key: "shipping", color: "#eab308" },
+                  { key: "fees", color: "#6b7280" },
+                ].map(({ key, color }) => {
+                  const val = lossBreakdown[key as keyof typeof lossBreakdown] as number;
+                  const pct = lossBreakdown.total > 0 ? (val / lossBreakdown.total) * 100 : 0;
+                  return pct > 0 ? (
+                    <div key={key} style={{ width: `${pct}%`, background: color }} title={`${key}: ${pct.toFixed(0)}%`} />
+                  ) : null;
+                })}
+              </div>
+              <InlineStack gap="200" blockAlign="center" wrap>
+                {[
+                  { key: "ads", color: "#ef4444", label: "Ads" },
+                  { key: "cogs", color: "#f97316", label: "COGS" },
+                  { key: "shipping", color: "#eab308", label: "Shipping" },
+                  { key: "fees", color: "#6b7280", label: "Fees" },
+                ].map(({ key, color, label }) => {
+                  const val = lossBreakdown[key as keyof typeof lossBreakdown] as number;
+                  const pct = lossBreakdown.total > 0 ? (val / lossBreakdown.total) * 100 : 0;
+                  return pct > 0 ? (
+                    <InlineStack key={key} gap="050" blockAlign="center">
+                      <div style={{ width: 6, height: 6, background: color, borderRadius: "50%", flexShrink: 0 }} />
+                      <Text variant="bodySm" as="span" tone="subdued">{label} {pct.toFixed(0)}%</Text>
+                    </InlineStack>
+                  ) : null;
+                })}
+              </InlineStack>
             </div>
-            <InlineStack gap="300" blockAlign="center" wrap>
-              {[
-                { key: "ads", color: "#ef4444", label: "Ads" },
-                { key: "cogs", color: "#f97316", label: "COGS" },
-                { key: "shipping", color: "#eab308", label: "Shipping" },
-                { key: "fees", color: "#6b7280", label: "Fees" },
-              ].map(({ key, color, label }) => {
-                const val = lossBreakdown[key as keyof typeof lossBreakdown] as number;
-                const pct = lossBreakdown.total > 0 ? (val / lossBreakdown.total) * 100 : 0;
-                return pct > 0 ? (
-                  <InlineStack key={key} gap="100" blockAlign="center">
-                    <div style={{ width: 8, height: 8, background: color, borderRadius: "50%" }} />
-                    <Text variant="bodySm" as="span" tone="subdued">{label}: {pct.toFixed(0)}%</Text>
-                  </InlineStack>
-                ) : null;
-              })}
-            </InlineStack>
-          </div>
-        )}
+          )}
+        </InlineStack>
       </div>
 
+      {/* ── Action items — one primary CTA per item, dismiss as × icon ── */}
       {visibleItems.length > 0 && (
         <div style={{ background: "#ffffff" }}>
           {visibleItems.map((item, i) => {
-            const conf = confidenceConfig[item.confidence];
             const typeIcon = actionTypeIcons[item.type] ?? "•";
+            // Primary action = first action marked primary
+            const primaryAction = item.actions.find((a) => a.primary) ?? item.actions[0];
+            // Secondary actions become text links below description
+            const secondaryActions = item.actions.filter((a) => !a.primary);
+
             return (
               <div
                 key={item.type}
-                style={{ padding: "20px 24px", borderBottom: i < visibleItems.length - 1 ? "1px solid #f5f5f5" : undefined }}
+                style={{
+                  padding: "16px 20px",
+                  borderBottom: i < visibleItems.length - 1 ? "1px solid #f5f5f5" : undefined,
+                  position: "relative",
+                }}
               >
-                <InlineStack align="space-between" blockAlign="start" gap="400">
-                  <InlineStack gap="300" blockAlign="start">
-                    <div style={{
-                      width: 36, height: 36, borderRadius: "8px", flexShrink: 0,
-                      background: item.severity === "critical" ? "#fff1f0" : item.severity === "warning" ? "#fffbe6" : "#f5f5f5",
-                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px",
-                    }}>
-                      {typeIcon}
-                    </div>
-                    <BlockStack gap="100">
-                      <InlineStack gap="200" blockAlign="center">
-                        <Text variant="bodyMd" fontWeight="semibold" as="p">{item.title}</Text>
-                        <Badge tone={item.severity === "critical" ? "critical" : item.severity === "warning" ? "warning" : "info"}>
-                          {item.timeToFix}
-                        </Badge>
-                      </InlineStack>
-                      <Text variant="bodySm" as="p" tone="subdued">{item.description}</Text>
-                      <InlineStack gap="300" blockAlign="center" wrap>
-                        <Text variant="bodySm" as="p" tone={item.severity === "critical" ? "critical" : "caution"}>
-                          {item.impact}
-                        </Text>
-                        {item.potentialRecovery != null && item.potentialRecovery > 0 && (
-                          <Text variant="bodySm" as="p" tone="success">
-                            · Recover ~{fmtK(item.potentialRecovery)}/week if fixed
-                          </Text>
-                        )}
-                        <span style={{ fontSize: "11px", color: conf.color }}>· {conf.text}</span>
-                      </InlineStack>
-                    </BlockStack>
-                  </InlineStack>
-                  <BlockStack gap="100">
-                    {item.actions.filter((a) => a.primary).map((a) => (
-                      <Button key={a.label} variant="primary" size="slim" onClick={() => navigate(a.url)}>
-                        {a.label}
-                      </Button>
-                    ))}
-                    {item.actions.filter((a) => !a.primary).map((a) => (
-                      <Button key={a.label} variant="plain" size="slim" onClick={() => navigate(a.url)}>
-                        {a.label}
-                      </Button>
-                    ))}
-                    <Button variant="plain" size="slim" onClick={() => snooze24h(item.type)}>
-                      Snooze 24h
-                    </Button>
-                  </BlockStack>
+                {/* Dismiss × — top right, subtle */}
+                <button
+                  onClick={() => snooze24h(item.type)}
+                  title="Dismiss for 24 hours"
+                  style={{
+                    position: "absolute", top: "12px", right: "16px",
+                    background: "none", border: "none", cursor: "pointer",
+                    fontSize: "16px", color: "#9ca3af", lineHeight: 1, padding: "2px 4px",
+                  }}
+                >
+                  ×
+                </button>
+
+                <InlineStack gap="300" blockAlign="start">
+                  {/* Type icon */}
+                  <div style={{
+                    width: 32, height: 32, borderRadius: "8px", flexShrink: 0,
+                    background: item.severity === "critical" ? "#fff1f0" : item.severity === "warning" ? "#fffbe6" : "#f0f9ff",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px",
+                  }}>
+                    {typeIcon}
+                  </div>
+
+                  {/* Content */}
+                  <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text variant="bodyMd" fontWeight="semibold" as="p">{item.title}</Text>
+                      <Badge
+                        tone={item.severity === "critical" ? "critical" : item.severity === "warning" ? "warning" : "info"}
+                        size="small"
+                      >
+                        {item.timeToFix}
+                      </Badge>
+                    </InlineStack>
+
+                    {/* Description + impact in one paragraph */}
+                    <Text variant="bodySm" as="p" tone="subdued">
+                      {item.description}
+                      {item.potentialRecovery != null && item.potentialRecovery > 0 &&
+                        ` Potential recovery: ~${fmtK(item.potentialRecovery)}/week.`}
+                    </Text>
+
+                    {/* Action row: ONE primary button + text links for secondary */}
+                    <InlineStack gap="300" blockAlign="center">
+                      {primaryAction && (
+                        <Button
+                          variant="primary"
+                          size="slim"
+                          onClick={() => navigate(primaryAction.url)}
+                        >
+                          {primaryAction.label}
+                        </Button>
+                      )}
+                      {secondaryActions.map((a) => (
+                        <button
+                          key={a.label}
+                          onClick={() => navigate(a.url)}
+                          style={{
+                            background: "none", border: "none", cursor: "pointer",
+                            fontSize: "13px", color: "#6b7280", textDecoration: "underline",
+                            padding: 0,
+                          }}
+                        >
+                          {a.label}
+                        </button>
+                      ))}
+                    </InlineStack>
+                  </div>
                 </InlineStack>
               </div>
             );

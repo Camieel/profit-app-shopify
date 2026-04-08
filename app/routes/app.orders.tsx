@@ -691,125 +691,55 @@ function ActionCenter({
 
   const topAction = actions[0];
 
-  const groups: { key: ActionEntry["group"]; label: string; icon: string }[] = [
-    { key: "leakage", label: "Revenue Leakage", icon: "🔥" },
-    { key: "data", label: "Data Issues", icon: "⚠️" },
-    { key: "operations", label: "Operations", icon: "⚙️" },
-  ];
-
-  const grouped = groups
-    .map((g) => ({ ...g, items: actions.filter((a) => a.group === g.key) }))
-    .filter((g) => g.items.length > 0);
+  // Flat list — top action first, then remaining. Max 5 total.
+  const allActions = [topAction, ...actions.slice(1)].slice(0, 5);
 
   return (
-    <Card>
-      <BlockStack gap="400">
+    <Card padding="0">
+      <Box padding="400" borderBlockEndWidth="025" borderColor="border">
         <Text variant="headingMd" as="h2">Action Center</Text>
-
-        {/* Recommended next step */}
-        <div style={{
-          padding: "16px",
-          borderRadius: "10px",
-          background: topAction.tone === "critical" ? "#fff1f0" : "#fffbe6",
-          border: `1px solid ${topAction.tone === "critical" ? "#ffa39e" : "#ffe58f"}`,
-        }}>
-          <BlockStack gap="200">
-            <BlockStack gap="050">
-              <Text variant="headingSm" as="h3">Recommended next step</Text>
-              <Text variant="bodySm" as="p" tone="critical">
-                This is your biggest profit leak right now
-              </Text>
-            </BlockStack>
-            <Text as="p" tone={topAction.tone === "critical" ? "critical" : "caution"}>
-              {topAction.message}
-            </Text>
-            {topAction.recoverable != null && topAction.recoverable > 0 && (
-              <BlockStack gap="0">
-                <Text variant="bodySm" as="p" tone="success">
-                  {`Potential recovery: ~${formatCurrency(topAction.recoverable)}`}
-                </Text>
-                <Text variant="bodySm" as="p" tone="subdued">
-                  Estimated recoverable margin
-                </Text>
-              </BlockStack>
-            )}
-            <Box>
-              <Button
-                variant="primary"
-                onClick={() =>
-                  navigate(buildUrl(topAction.filterKey, topAction.filterValue))
-                }
-              >
-                {topAction.buttonLabel}
-              </Button>
-            </Box>
-          </BlockStack>
-        </div>
-
-        {/* Grouped remaining actions */}
-        {grouped.map((g, gi) => (
-          <BlockStack key={g.key} gap="200">
-            <InlineStack gap="100" blockAlign="center">
-              <span style={{ fontSize: "14px" }}>{g.icon}</span>
-              <Text variant="bodySm" as="p" fontWeight="semibold" tone="subdued">
-                {g.label}
-              </Text>
-            </InlineStack>
-            {g.items.map((a) => (
-              <div
-                key={a.id}
-                style={{
-                  padding: "12px 16px",
-                  borderRadius: "8px",
-                  background:
-                    a.tone === "critical"
-                      ? "#fff1f0"
-                      : a.tone === "caution"
-                      ? "#fffbe6"
-                      : "#f0f9ff",
-                  border: `1px solid ${
-                    a.tone === "critical"
-                      ? "#ffa39e"
-                      : a.tone === "caution"
-                      ? "#ffe58f"
-                      : "#bae6fd"
-                  }`,
-                }}
-              >
-                <InlineStack align="space-between" blockAlign="center" gap="400">
-                  <BlockStack gap="050">
-                    <Text
-                      as="p"
-                      tone={
-                        a.tone === "critical"
-                          ? "critical"
-                          : a.tone === "caution"
-                          ? "caution"
-                          : undefined
-                      }
-                    >
-                      {a.message}
-                    </Text>
-                    {a.recoverable != null && a.recoverable > 0 && (
-                      <Text variant="bodySm" as="p" tone="success">
-                        {`Potential recovery: ~${formatCurrency(a.recoverable)}`}
-                      </Text>
-                    )}
-                  </BlockStack>
-                  <Button
-                    size="slim"
-                    onClick={() =>
-                      navigate(buildUrl(a.filterKey, a.filterValue))
-                    }
+      </Box>
+      <BlockStack gap="0">
+        {allActions.map((a, i) => {
+          const isTop = i === 0;
+          const bg = a.tone === "critical" ? "#fff1f0" : a.tone === "caution" ? "#fffbe6" : "#ffffff";
+          const borderLeft = a.tone === "critical" ? "3px solid #d92d20" : a.tone === "caution" ? "3px solid #b54708" : "3px solid #e5e7eb";
+          return (
+            <div
+              key={a.id}
+              style={{
+                padding: "14px 20px",
+                background: bg,
+                borderBottom: i < allActions.length - 1 ? "1px solid #f0f0f0" : undefined,
+                borderLeft,
+              }}
+            >
+              <InlineStack align="space-between" blockAlign="center" gap="400">
+                <BlockStack gap="050">
+                  <Text
+                    variant={isTop ? "bodyMd" : "bodySm"}
+                    fontWeight={isTop ? "semibold" : "regular"}
+                    as="p"
+                    tone={a.tone === "critical" ? "critical" : a.tone === "caution" ? "caution" : undefined}
                   >
-                    {a.buttonLabel}
-                  </Button>
-                </InlineStack>
-              </div>
-            ))}
-            {gi < grouped.length - 1 && <Divider />}
-          </BlockStack>
-        ))}
+                    {a.message}
+                    {a.recoverable != null && a.recoverable > 0 && (
+                      <> — <span style={{ color: "#008060" }}>~{formatCurrency(a.recoverable)} recoverable</span></>
+                    )}
+                  </Text>
+                </BlockStack>
+                {/* ONE primary button per item */}
+                <Button
+                  variant={isTop ? "primary" : "plain"}
+                  size="slim"
+                  onClick={() => navigate(buildUrl(a.filterKey, a.filterValue))}
+                >
+                  {a.buttonLabel}
+                </Button>
+              </InlineStack>
+            </div>
+          );
+        })}
       </BlockStack>
     </Card>
   );
