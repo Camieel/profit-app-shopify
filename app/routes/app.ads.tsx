@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import { authenticate } from "../shopify.server";
-import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
+import { DateRangePicker, loadFromStorage } from "../DateRangePicker";
 import db from "../db.server";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

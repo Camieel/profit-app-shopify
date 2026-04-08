@@ -11,7 +11,7 @@ import {
 } from "@shopify/polaris";
 import type { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
-import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
+import { DateRangePicker, loadFromStorage } from "../DateRangePicker";
 import db from "../db.server";
 
 const PAGE_SIZE = 25;

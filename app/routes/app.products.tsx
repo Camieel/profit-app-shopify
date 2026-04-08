@@ -10,7 +10,7 @@ import {
   SkeletonPage, SkeletonBodyText, InlineGrid, Select,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
-import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
+import { DateRangePicker, loadFromStorage } from "../DateRangePicker";
 import db from "../db.server";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

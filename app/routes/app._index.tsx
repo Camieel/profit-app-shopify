@@ -13,7 +13,7 @@ import {
   ResponsiveContainer, ReferenceDot, ReferenceLine,
 } from "recharts";
 import { authenticate } from "../shopify.server";
-import { DateRangePicker, loadFromStorage } from "../components/DateRangePicker";
+import { DateRangePicker, loadFromStorage } from "../DateRangePicker";
 import db from "../db.server";
 import { toMonthly } from "./app.expenses";
 
