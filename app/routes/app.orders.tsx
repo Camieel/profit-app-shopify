@@ -956,26 +956,6 @@ export default function OrdersPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <InlineGrid columns={{ xs: 1, sm: 2 }} gap="400">
-                <TextField
-                  label="From"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(v) => updateDateRange(v, dateTo)}
-                  autoComplete="off"
-                  disabled={isNavigating}
-                />
-                <TextField
-                  label="To"
-                  type="date"
-                  value={dateTo}
-                  onChange={(v) => updateDateRange(dateFrom, v)}
-                  autoComplete="off"
-                  disabled={isNavigating}
-                />
-              </InlineGrid>
-
-              {/* New: date presets */}
               <DateRangePicker dateFrom={dateFrom} dateTo={dateTo} onUpdate={updateDateRange} />
 
               <InlineGrid columns={{ xs: 1, sm: 4 }} gap="400">
