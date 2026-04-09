@@ -1,20 +1,15 @@
 // app/routes/app.cogs.tsx
-// COGS management moved here from app.products.tsx
-// "Valid from" date is shown but currently informational only —
-// retroactive recalculation (history table) is a future feature.
-
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
-  useLoaderData, useNavigation, useSubmit, useFetcher,
-  useSearchParams,
+  useLoaderData, useNavigation, useSubmit, useFetcher, useSearchParams,
 } from "react-router";
 import { useState, useCallback, useRef, useEffect } from "react";
 import {
-  Page, Layout, Card, Text, Badge, Box, BlockStack, InlineStack,
-  Button, TextField, Banner, EmptyState, Modal, DropZone, List,
-  Divider, SkeletonBodyText, IndexTable, useIndexResourceState,
-  Filters, Pagination, Select,
+  Page, Layout, Text, Badge, Box, BlockStack, InlineStack,
+  Button, Banner, EmptyState, Modal, DropZone, List,
+  Divider, IndexTable, useIndexResourceState, Filters,
+  Pagination, Select, TextField,
 } from "@shopify/polaris";
 import type { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
@@ -69,19 +64,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const pageSizeParam = parseInt(url.searchParams.get("pageSize") || "25", 10);
   const pageSize = [25, 50, 100].includes(pageSizeParam) ? pageSizeParam : 25;
 
-  const variantWhere: Prisma.ProductVariantWhereInput = {
-    product: { shop },
-  };
-
+  const variantWhere: Prisma.ProductVariantWhereInput = { product: { shop } };
   if (search) {
     variantWhere.OR = [
       { sku: { contains: search, mode: "insensitive" } },
       { product: { title: { contains: search, mode: "insensitive" } } },
     ];
   }
-  if (filter === "missing") {
-    variantWhere.effectiveCost = null;
-  }
+  if (filter === "missing") variantWhere.effectiveCost = null;
 
   const [totalVariants, totalFilteredVariants, allMissingCount] = await Promise.all([
     db.productVariant.count({ where: { product: { shop } } }),
@@ -99,40 +89,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       costPerItem: true, customCost: true, effectiveCost: true,
       product: { select: { id: true, title: true, shopifyProductId: true } },
     },
-    orderBy: [
-      { effectiveCost: "asc" }, // null first
-      { product: { title: "asc" } },
-    ],
+    orderBy: [{ effectiveCost: "asc" }, { product: { title: "asc" } }],
     skip: (currentPage - 1) * pageSize,
     take: pageSize,
   });
 
-  const cogsCoveragePercent = totalVariants > 0
-    ? Math.round(((totalVariants - allMissingCount) / totalVariants) * 100) : 100;
-
   return json({
     variants: variants.map((v) => ({
-      id: v.id,
-      shopifyVariantId: v.shopifyVariantId,
-      title: v.title,
-      sku: v.sku,
-      costPerItem: v.costPerItem,
-      customCost: v.customCost,
-      effectiveCost: v.effectiveCost,
-      productTitle: v.product.title,
-      productId: v.product.id,
+      id: v.id, shopifyVariantId: v.shopifyVariantId, title: v.title, sku: v.sku,
+      costPerItem: v.costPerItem, customCost: v.customCost, effectiveCost: v.effectiveCost,
+      productTitle: v.product.title, productId: v.product.id,
       shopifyProductId: v.product.shopifyProductId,
     })),
-    totalVariants,
-    missingCogsCount: allMissingCount,
-    cogsCoveragePercent,
-    totalFilteredVariants,
-    page: currentPage,
-    pageSize,
-    totalPages,
-    search,
-    filter,
-    shop,
+    totalVariants, missingCogsCount: allMissingCount,
+    cogsCoveragePercent: totalVariants > 0
+      ? Math.round(((totalVariants - allMissingCount) / totalVariants) * 100) : 100,
+    totalFilteredVariants, page: currentPage, pageSize, totalPages, search, filter, shop,
   });
 };
 
@@ -148,32 +120,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const customCost = customCostRaw ? parseFloat(customCostRaw) : null;
     const variant = await db.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) return json({ error: "Variant not found" }, { status: 404 });
-    const effectiveCost = customCost ?? variant.costPerItem ?? null;
     await db.productVariant.update({
       where: { id: variantId },
-      data: { customCost, effectiveCost },
-    });
-    return json({ success: true });
-  }
-
-  if (intent === "clearCustomCost") {
-    const variantId = formData.get("variantId") as string;
-    const variant = await db.productVariant.findUnique({ where: { id: variantId } });
-    if (!variant) return json({ error: "Variant not found" }, { status: 404 });
-    await db.productVariant.update({
-      where: { id: variantId },
-      data: { customCost: null, effectiveCost: variant.costPerItem ?? null },
+      data: { customCost, effectiveCost: customCost ?? variant.costPerItem ?? null },
     });
     return json({ success: true });
   }
 
   if (intent === "bulkUpdateCosts") {
-    const variantIdsRaw = formData.get("variantIds") as string;
-    const costRaw = formData.get("cost") as string;
+    const variantIds = JSON.parse(formData.get("variantIds") as string) as string[];
+    const customCost = parseFloat(formData.get("cost") as string);
     const onlyMissing = formData.get("onlyMissing") === "true";
-    if (!variantIdsRaw || !costRaw) return json({ error: "Missing data" }, { status: 400 });
-    const variantIds = JSON.parse(variantIdsRaw) as string[];
-    const customCost = parseFloat(costRaw);
     if (isNaN(customCost) || customCost < 0) return json({ error: "Invalid cost" }, { status: 400 });
     const whereClause: Prisma.ProductVariantWhereInput = { id: { in: variantIds } };
     if (onlyMissing) whereClause.effectiveCost = null;
@@ -184,20 +141,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "bulkImport") {
     const csvData = formData.get("csvData") as string;
     const shop = formData.get("shop") as string;
-
-    const missingBefore = await db.productVariant.count({
-      where: { product: { shop }, effectiveCost: null },
-    });
-
+    const missingBefore = await db.productVariant.count({ where: { product: { shop }, effectiveCost: null } });
     const lines = csvData.split("\n").map((l) => l.trim()).filter(Boolean);
     const dataLines = lines[0]?.toLowerCase().includes("sku") ? lines.slice(1) : lines;
     const result: ImportResult = { updated: 0, notFound: [], errors: [], missingBefore, missingAfter: 0 };
-
     const allVariants = await db.productVariant.findMany({
       where: { product: { shop } },
       select: { id: true, sku: true, shopifyVariantId: true },
     });
-
     const bySku = new Map<string, string>();
     const byVariantId = new Map<string, string>();
     for (const v of allVariants) {
@@ -206,40 +157,70 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       byVariantId.set(plainId, v.id);
       byVariantId.set(v.shopifyVariantId, v.id);
     }
-
     const updates: { id: string; cost: number }[] = [];
     for (const line of dataLines) {
-      if (!line) continue;
       const parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""));
       if (parts.length < 2) { result.errors.push(`Invalid line: "${line}"`); continue; }
-      const identifier = parts[0];
       const cost = parseFloat(parts[1]);
-      if (isNaN(cost) || cost < 0) { result.errors.push(`Invalid cost for "${identifier}"`); continue; }
-      const id = bySku.get(identifier.toLowerCase()) ?? byVariantId.get(identifier) ?? null;
-      if (!id) { result.notFound.push(identifier); continue; }
+      if (isNaN(cost) || cost < 0) { result.errors.push(`Invalid cost for "${parts[0]}"`); continue; }
+      const id = bySku.get(parts[0].toLowerCase()) ?? byVariantId.get(parts[0]) ?? null;
+      if (!id) { result.notFound.push(parts[0]); continue; }
       updates.push({ id, cost });
     }
-
-    const CHUNK_SIZE = 25;
-    for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
-      const chunk = updates.slice(i, i + CHUNK_SIZE);
-      await Promise.all(
-        chunk.map(({ id, cost }) =>
-          db.productVariant.update({ where: { id }, data: { customCost: cost, effectiveCost: cost } })
-        )
-      );
-      result.updated += chunk.length;
+    for (let i = 0; i < updates.length; i += 25) {
+      await Promise.all(updates.slice(i, i + 25).map(({ id, cost }) =>
+        db.productVariant.update({ where: { id }, data: { customCost: cost, effectiveCost: cost } })
+      ));
+      result.updated += Math.min(25, updates.length - i);
     }
-
-    result.missingAfter = await db.productVariant.count({
-      where: { product: { shop }, effectiveCost: null },
-    });
-
+    result.missingAfter = await db.productVariant.count({ where: { product: { shop }, effectiveCost: null } });
     return json({ success: true, result });
   }
 
   return json({ error: "Unknown intent" }, { status: 400 });
 };
+
+// ── Design tokens (same as dashboard) ────────────────────────────────────────
+const tokens = {
+  profit: "#16a34a", profitBg: "#f0fdf4", profitBorder: "#bbf7d0",
+  loss: "#dc2626", lossBg: "#fef2f2", lossBorder: "#fecaca",
+  warning: "#d97706", warningBg: "#fffbeb", warningBorder: "#fde68a",
+  border: "#e2e8f0", cardBg: "#ffffff",
+  text: "#0f172a", textMuted: "#64748b",
+};
+
+function DCard({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{ background: tokens.cardBg, border: `1px solid ${tokens.border}`, borderRadius: "12px", overflow: "hidden", ...style }}>
+      {children}
+    </div>
+  );
+}
+
+function DBadge({ children, variant = "default", size = "md" }: {
+  children: React.ReactNode;
+  variant?: "default" | "success" | "danger" | "warning" | "info";
+  size?: "sm" | "md";
+}) {
+  const colors: Record<string, { bg: string; color: string; border: string }> = {
+    default: { bg: "#f1f5f9", color: "#475569", border: "#e2e8f0" },
+    success: { bg: tokens.profitBg, color: tokens.profit, border: tokens.profitBorder },
+    danger:  { bg: tokens.lossBg, color: tokens.loss, border: tokens.lossBorder },
+    warning: { bg: tokens.warningBg, color: tokens.warning, border: tokens.warningBorder },
+    info:    { bg: "#eff6ff", color: "#2563eb", border: "#bfdbfe" },
+  };
+  const c = colors[variant];
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      padding: size === "sm" ? "2px 8px" : "3px 10px", borderRadius: "100px",
+      fontSize: size === "sm" ? "11px" : "12px", fontWeight: 600,
+      background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+    }}>
+      {children}
+    </span>
+  );
+}
 
 // ── Inline cost input ─────────────────────────────────────────────────────────
 function InlineCostInput({ variant }: { variant: VariantRow }) {
@@ -272,13 +253,11 @@ function InlineCostInput({ variant }: { variant: VariantRow }) {
   const isSaving = fetcher.state !== "idle";
 
   return (
-    <InlineStack gap="100" blockAlign="center">
-      <div style={{ maxWidth: "140px" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+      <div style={{ maxWidth: "120px" }}>
         <TextField
-          label="Cost"
-          labelHidden
-          type="number"
-          prefix="$"
+          label="Cost" labelHidden
+          type="number" prefix="$"
           placeholder={variant.costPerItem != null ? String(variant.costPerItem) : "0.00"}
           value={value}
           onChange={setValue}
@@ -288,16 +267,15 @@ function InlineCostInput({ variant }: { variant: VariantRow }) {
           size="slim"
         />
       </div>
-      {isSaving && <Text variant="bodySm" as="span" tone="subdued">Saving…</Text>}
-      {!isSaving && justSaved && <Text variant="bodySm" as="span" tone="success">✓</Text>}
-    </InlineStack>
+      {isSaving && <span style={{ fontSize: "12px", color: tokens.textMuted }}>Saving…</span>}
+      {!isSaving && justSaved && <span style={{ fontSize: "12px", color: tokens.profit, fontWeight: 600 }}>✓ Saved</span>}
+    </div>
   );
 }
 
 // ── Bulk cost modal ───────────────────────────────────────────────────────────
 function BulkCostModal({ open, onClose, selectedCount, variantIds }: {
-  open: boolean; onClose: () => void;
-  selectedCount: number; variantIds: string[];
+  open: boolean; onClose: () => void; selectedCount: number; variantIds: string[];
 }) {
   const submit = useSubmit();
   const [cost, setCost] = useState("");
@@ -307,22 +285,15 @@ function BulkCostModal({ open, onClose, selectedCount, variantIds }: {
   const handleApply = () => {
     if (!cost || isNaN(parseFloat(cost))) return;
     submit(
-      {
-        intent: "bulkUpdateCosts",
-        variantIds: JSON.stringify(variantIds),
-        cost,
-        onlyMissing: String(onlyMissing),
-      },
+      { intent: "bulkUpdateCosts", variantIds: JSON.stringify(variantIds), cost, onlyMissing: String(onlyMissing) },
       { method: "POST" }
     );
-    onClose();
-    setCost("");
+    onClose(); setCost("");
   };
 
   return (
     <Modal
-      open={open}
-      onClose={onClose}
+      open={open} onClose={onClose}
       title={`Set cost for ${String(selectedCount)} variant${selectedCount !== 1 ? "s" : ""}`}
       primaryAction={{ content: "Apply", onAction: handleApply, disabled: !cost }}
       secondaryActions={[{ content: "Cancel", onAction: onClose }]}
@@ -330,37 +301,21 @@ function BulkCostModal({ open, onClose, selectedCount, variantIds }: {
       <Modal.Section>
         <BlockStack gap="400">
           <TextField
-            label="Cost per item"
-            type="number"
-            prefix="$"
-            value={cost}
-            onChange={setCost}
-            autoComplete="off"
-            placeholder="12.50"
+            label="Cost per item" type="number" prefix="$"
+            value={cost} onChange={setCost} autoComplete="off" placeholder="12.50"
           />
           <TextField
-            label="Valid from"
-            type="date"
-            value={validFrom}
-            onChange={setValidFrom}
+            label="Valid from" type="date" value={validFrom} onChange={setValidFrom}
             autoComplete="off"
-            helpText="Informational only — retroactive recalculation of past orders is a future feature. Affects new orders from this date."
+            helpText="Informational only — retroactive recalculation is a future feature."
           />
           <BlockStack gap="200">
             <Text variant="bodySm" as="p" fontWeight="semibold">Apply to:</Text>
-            <InlineStack gap="400">
-              <Button
-                variant={!onlyMissing ? "primary" : "plain"}
-                onClick={() => setOnlyMissing(false)}
-                size="slim"
-              >
+            <InlineStack gap="300">
+              <Button variant={!onlyMissing ? "primary" : "plain"} onClick={() => setOnlyMissing(false)} size="slim">
                 All {String(selectedCount)} selected
               </Button>
-              <Button
-                variant={onlyMissing ? "primary" : "plain"}
-                onClick={() => setOnlyMissing(true)}
-                size="slim"
-              >
+              <Button variant={onlyMissing ? "primary" : "plain"} onClick={() => setOnlyMissing(true)} size="slim">
                 Only missing COGS
               </Button>
             </InlineStack>
@@ -383,9 +338,9 @@ function ImportModal({ open, onClose, shop, totalVariants }: {
   const isSaving = fetcher.state === "submitting";
   const importResult = (fetcher.data as any)?.result as ImportResult | null;
 
-  const handleDropZoneDrop = useCallback((_: File[], acceptedFiles: File[]) => {
+  const handleDrop = useCallback((_: File[], accepted: File[]) => {
     setFileError(null);
-    const file = acceptedFiles[0];
+    const file = accepted[0];
     if (!file) return;
     if (!file.name.endsWith(".csv")) { setFileError("Only .csv files are supported."); return; }
     setFileName(file.name);
@@ -395,41 +350,34 @@ function ImportModal({ open, onClose, shop, totalVariants }: {
   }, []);
 
   const handleDownloadTemplate = () => {
-    const template = "SKU or Variant ID,Cost\nMY-SKU-001,9.99\n123456789,24.50\n";
-    const blob = new Blob([template], { type: "text/csv" });
+    const blob = new Blob(["SKU or Variant ID,Cost\nMY-SKU-001,9.99\n123456789,24.50\n"], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "cogs-import-template.csv"; a.click();
     URL.revokeObjectURL(url);
   };
 
   const handleClose = () => { setCsvText(""); setFileName(null); setFileError(null); onClose(); };
-
-  const accuracyBefore = importResult
-    ? Math.round(((totalVariants - importResult.missingBefore) / totalVariants) * 100) : null;
-  const accuracyAfter = importResult
-    ? Math.round(((totalVariants - importResult.missingAfter) / totalVariants) * 100) : null;
+  const accuracyBefore = importResult ? Math.round(((totalVariants - importResult.missingBefore) / totalVariants) * 100) : null;
+  const accuracyAfter = importResult ? Math.round(((totalVariants - importResult.missingAfter) / totalVariants) * 100) : null;
 
   return (
     <Modal
-      open={open}
-      onClose={handleClose}
-      title="Bulk import COGS from CSV"
+      open={open} onClose={handleClose} title="Bulk import COGS from CSV"
       primaryAction={{
         content: "Import",
         onAction: () => fetcher.submit({ intent: "bulkImport", csvData: csvText, shop }, { method: "POST" }),
-        loading: isSaving,
-        disabled: !csvText.trim() || isSaving,
+        loading: isSaving, disabled: !csvText.trim() || isSaving,
       }}
       secondaryActions={[{ content: "Close", onAction: handleClose }]}
     >
       <Modal.Section>
         <BlockStack gap="400">
           <Banner tone="info">
-            <p>Upload a CSV with two columns: <strong>SKU or Variant ID</strong> and <strong>Cost</strong>.</p>
+            <p>Two columns: <strong>SKU or Variant ID</strong> and <strong>Cost</strong>.</p>
           </Banner>
           <Button variant="plain" onClick={handleDownloadTemplate}>Download CSV template</Button>
           <Divider />
-          <DropZone accept=".csv" type="file" onDrop={handleDropZoneDrop} label="Upload CSV file">
+          <DropZone accept=".csv" type="file" onDrop={handleDrop} label="Upload CSV file">
             {fileName ? (
               <Box padding="400">
                 <InlineStack gap="200" blockAlign="center">
@@ -438,17 +386,16 @@ function ImportModal({ open, onClose, shop, totalVariants }: {
                 </InlineStack>
               </Box>
             ) : (
-              <DropZone.FileUpload actionTitle="Upload CSV" actionHint="or paste your CSV data below" />
+              <DropZone.FileUpload actionTitle="Upload CSV" actionHint="or paste below" />
             )}
           </DropZone>
           {fileError && <Text as="p" tone="critical">{fileError}</Text>}
           <TextField
-            label="Or paste CSV data directly"
-            multiline={6}
+            label="Or paste CSV data directly" multiline={6}
             value={csvText}
             onChange={(val) => { setCsvText(val); setFileName(null); }}
             autoComplete="off"
-            placeholder={"SKU or Variant ID,Cost\nMY-SKU-001,9.99\n123456789,24.50"}
+            placeholder={"SKU or Variant ID,Cost\nMY-SKU-001,9.99"}
           />
         </BlockStack>
       </Modal.Section>
@@ -472,9 +419,7 @@ function ImportModal({ open, onClose, shop, totalVariants }: {
                 <Text as="p" tone="caution">{`Not found (${importResult.notFound.length}):`}</Text>
                 <List type="bullet">
                   {importResult.notFound.slice(0, 10).map((id) => <List.Item key={id}>{id}</List.Item>)}
-                  {importResult.notFound.length > 10 && (
-                    <List.Item>{`…and ${importResult.notFound.length - 10} more`}</List.Item>
-                  )}
+                  {importResult.notFound.length > 10 && <List.Item>{`…and ${importResult.notFound.length - 10} more`}</List.Item>}
                 </List>
               </BlockStack>
             )}
@@ -508,7 +453,6 @@ export default function CogsPage() {
   const [searchValue, setSearchValue] = useState(search);
   const [importOpen, setImportOpen] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
-
   const isLoading = navigation.state === "loading";
 
   const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } =
@@ -527,22 +471,12 @@ export default function CogsPage() {
     searchTimeout.current = setTimeout(() => updateParam("search", value), 500);
   }, [updateParam]);
 
-  const filters = [
-    {
-      key: "filter",
-      label: "COGS status",
-      filter: (
-        <Button onClick={() => updateParam("filter", filter === "missing" ? "all" : "missing")}>
-          {filter === "missing" ? "Show all" : "Missing COGS only"}
-        </Button>
-      ),
-      shortcut: true,
-    },
-  ];
+  const coverageIsHealthy = cogsCoveragePercent >= 95;
+  const getShopifyProductUrl = (shopifyProductId: string) =>
+    `https://${shop}/admin/products/${shopifyProductId.replace("gid://shopify/Product/", "")}`;
 
   const appliedFilters = filter === "missing" ? [{
-    key: "filter",
-    label: "Missing COGS only",
+    key: "filter", label: "Missing COGS only",
     onRemove: () => updateParam("filter", "all"),
   }] : [];
 
@@ -551,44 +485,45 @@ export default function CogsPage() {
     onAction: () => setBulkModalOpen(true),
   }];
 
-  const getShopifyProductUrl = (shopifyProductId: string) =>
-    `https://${shop}/admin/products/${shopifyProductId.replace("gid://shopify/Product/", "")}`;
-
-  const coverageIsHealthy = cogsCoveragePercent >= 95;
-
   const rowMarkup = variants.map((variant, index) => (
     <IndexTable.Row
-      id={variant.id}
-      key={variant.id}
+      id={variant.id} key={variant.id}
       selected={selectedResources.includes(variant.id)}
       position={index}
       tone={variant.effectiveCost === null ? "critical" : undefined}
     >
       <IndexTable.Cell>
-        <Button variant="plain" url={getShopifyProductUrl(variant.shopifyProductId)} target="_blank">
-          {variant.productTitle}
-        </Button>
+        <a
+          href={getShopifyProductUrl(variant.shopifyProductId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontSize: "13px", fontWeight: 600, color: "#2563eb", textDecoration: "none" }}
+          onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+          onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+        >
+          {variant.productTitle} ↗
+        </a>
         {variant.title !== "Default Title" && (
-          <><br /><Text variant="bodySm" tone="subdued" as="span">{variant.title}</Text></>
+          <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.textMuted }}>{variant.title}</p>
         )}
       </IndexTable.Cell>
       <IndexTable.Cell>
-        <Text variant="bodySm" as="span" tone="subdued">{variant.sku || "—"}</Text>
+        <span style={{ fontSize: "13px", color: tokens.textMuted, fontFamily: "monospace" }}>
+          {variant.sku || "—"}
+        </span>
       </IndexTable.Cell>
       <IndexTable.Cell>
         {variant.costPerItem != null
-          ? `$${variant.costPerItem.toFixed(2)}`
-          : <Badge tone="attention">Not in Shopify</Badge>}
+          ? <span style={{ fontSize: "13px", color: tokens.textMuted }}>${variant.costPerItem.toFixed(2)}</span>
+          : <DBadge variant="warning" size="sm">Not in Shopify</DBadge>}
       </IndexTable.Cell>
       <IndexTable.Cell>
         <InlineCostInput variant={variant} />
       </IndexTable.Cell>
       <IndexTable.Cell>
-        {variant.effectiveCost != null ? (
-          <Text as="span" fontWeight="bold">{`$${variant.effectiveCost.toFixed(2)}`}</Text>
-        ) : (
-          <Badge tone="critical">Missing</Badge>
-        )}
+        {variant.effectiveCost != null
+          ? <span style={{ fontSize: "14px", fontWeight: 700, color: tokens.text }}>${variant.effectiveCost.toFixed(2)}</span>
+          : <DBadge variant="danger" size="sm">Missing</DBadge>}
       </IndexTable.Cell>
     </IndexTable.Row>
   ));
@@ -599,161 +534,187 @@ export default function CogsPage() {
       backAction={{ content: "Settings", url: "/app/settings" }}
       primaryAction={{ content: "Import CSV", onAction: () => setImportOpen(true) }}
     >
-      <Layout>
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+
         {/* Coverage summary */}
-        <Layout.Section>
-          <Card>
-            <InlineStack gap="800" wrap>
-              <BlockStack gap="100">
-                <Text variant="bodySm" as="p" tone="subdued">Total variants</Text>
-                <Text variant="headingMd" as="p">{totalVariants}</Text>
-              </BlockStack>
-              <BlockStack gap="100">
-                <Text variant="bodySm" as="p" tone="subdued">Missing cost data</Text>
-                <Text variant="headingMd" as="p" tone={missingCogsCount > 0 ? "critical" : undefined}>
+        <DCard>
+          <div style={{ padding: "20px 24px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "32px", alignItems: "start" }}>
+              {/* Total variants */}
+              <div>
+                <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 500, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total variants</p>
+                <p style={{ margin: 0, fontSize: "28px", fontWeight: 700, color: tokens.text, letterSpacing: "-0.02em" }}>{totalVariants}</p>
+              </div>
+              {/* Missing */}
+              <div>
+                <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 500, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Missing cost data</p>
+                <p style={{ margin: 0, fontSize: "28px", fontWeight: 700, letterSpacing: "-0.02em", color: missingCogsCount > 0 ? tokens.loss : tokens.profit }}>
                   {missingCogsCount}
-                </Text>
-              </BlockStack>
-              <BlockStack gap="200">
-                <BlockStack gap="050">
-                  <Text variant="bodySm" as="p" tone="subdued">COGS coverage</Text>
-                  <InlineStack gap="200" blockAlign="center">
-                    <Text variant="headingMd" as="p" tone={coverageIsHealthy ? undefined : "critical"}>
+                </p>
+              </div>
+              {/* Coverage bar */}
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                  <p style={{ margin: 0, fontSize: "12px", fontWeight: 500, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>COGS coverage</p>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <p style={{ margin: 0, fontSize: "22px", fontWeight: 700, color: coverageIsHealthy ? tokens.profit : tokens.loss, letterSpacing: "-0.02em" }}>
                       {cogsCoveragePercent}%
-                    </Text>
-                    <Badge tone={coverageIsHealthy ? "success" : "critical"}>
+                    </p>
+                    <DBadge variant={coverageIsHealthy ? "success" : "danger"} size="sm">
                       {coverageIsHealthy ? "Healthy" : "Incomplete"}
-                    </Badge>
-                  </InlineStack>
-                </BlockStack>
-                <div style={{ height: "6px", borderRadius: "3px", background: "#e5e7eb", overflow: "hidden" }}>
+                    </DBadge>
+                  </div>
+                </div>
+                <div style={{ height: "8px", borderRadius: "4px", background: "#e2e8f0", overflow: "hidden" }}>
                   <div style={{
-                    height: "100%",
-                    width: `${cogsCoveragePercent}%`,
-                    background: coverageIsHealthy ? "#008060" : "#d92d20",
-                    borderRadius: "3px",
-                    transition: "width 0.3s ease",
+                    height: "100%", width: `${cogsCoveragePercent}%`,
+                    background: coverageIsHealthy ? tokens.profit : tokens.loss,
+                    borderRadius: "4px", transition: "width 0.4s ease",
                   }} />
                 </div>
-                <Text variant="bodySm" as="p" tone="subdued">Target: 95%+</Text>
-              </BlockStack>
-            </InlineStack>
-          </Card>
-        </Layout.Section>
-
-        {/* Recommended action */}
-        {missingCogsCount > 0 && (
-          <Layout.Section>
-            <div style={{ padding: "16px 20px", borderRadius: "12px", background: "#fff1f0", border: "1px solid #ffa39e" }}>
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="050">
-                  <Text variant="headingSm" as="h3">
-                    {`${missingCogsCount} variant${missingCogsCount !== 1 ? "s" : ""} missing cost data`}
-                  </Text>
-                  <Text variant="bodySm" as="p" tone="critical">
-                    Your reported profit is overstated until this is fixed
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="200">
-                  <Button variant="primary" onClick={() => updateParam("filter", "missing")}>
-                    Show missing only
-                  </Button>
-                  <Button onClick={() => setImportOpen(true)}>Import CSV</Button>
-                </InlineStack>
-              </InlineStack>
+                <p style={{ margin: "4px 0 0", fontSize: "12px", color: tokens.textMuted }}>Target: 95%+</p>
+              </div>
             </div>
-          </Layout.Section>
+          </div>
+        </DCard>
+
+        {/* Alert bar when missing */}
+        {missingCogsCount > 0 && (
+          <div style={{
+            padding: "14px 20px", borderRadius: "10px",
+            background: tokens.lossBg, border: `1px solid ${tokens.lossBorder}`,
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px",
+          }}>
+            <div>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: tokens.loss }}>
+                {missingCogsCount} variant{missingCogsCount !== 1 ? "s" : ""} missing cost data
+              </p>
+              <p style={{ margin: "2px 0 0", fontSize: "13px", color: tokens.loss, opacity: 0.8 }}>
+                Profit is overstated until this is fixed
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+              <button
+                onClick={() => updateParam("filter", "missing")}
+                style={{
+                  padding: "7px 16px", borderRadius: "8px",
+                  background: tokens.loss, color: "#fff",
+                  border: "none", cursor: "pointer",
+                  fontSize: "13px", fontWeight: 600,
+                  transition: "opacity 0.15s",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
+                onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+              >
+                Show missing only
+              </button>
+              <button
+                onClick={() => setImportOpen(true)}
+                style={{
+                  padding: "7px 16px", borderRadius: "8px",
+                  background: "transparent", color: tokens.loss,
+                  border: `1px solid ${tokens.lossBorder}`, cursor: "pointer",
+                  fontSize: "13px", fontWeight: 600,
+                }}
+              >
+                Import CSV
+              </button>
+            </div>
+          </div>
         )}
 
         {/* Table */}
-        <Layout.Section>
-          <Card padding="0">
-            {filter === "missing" && (
-              <Box padding="300" borderBlockEndWidth="025" borderColor="border">
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="bodySm" as="p" tone="caution" fontWeight="semibold">
-                    ⚠️ Showing missing COGS only
-                  </Text>
-                  <Button size="slim" variant="plain" onClick={() => updateParam("filter", "all")}>
-                    Show all
-                  </Button>
-                </InlineStack>
-              </Box>
-            )}
-
-            <div style={{ padding: "16px" }}>
-              <Filters
-                queryValue={searchValue}
-                filters={filters}
-                appliedFilters={appliedFilters}
-                onQueryChange={handleSearchChange}
-                onQueryClear={() => handleSearchChange("")}
-                onClearAll={() => { updateParam("filter", "all"); setSearchValue(""); }}
-                queryPlaceholder="Search by product name or SKU…"
-              />
-            </div>
-
-            <div style={{ opacity: isLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>
-              <IndexTable
-                resourceName={{ singular: "variant", plural: "variants" }}
-                itemCount={variants.length}
-                selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
-                onSelectionChange={handleSelectionChange}
-                promotedBulkActions={promotedBulkActions}
-                headings={[
-                  { title: "Product & Variant" },
-                  { title: "SKU" },
-                  { title: "Shopify Cost" },
-                  { title: "Custom Cost" },
-                  { title: "Effective Cost" },
-                ]}
-                emptyState={
-                  filter === "missing" && missingCogsCount === 0 ? (
-                    <EmptyState
-                      heading="All product costs are complete 🎉"
-                      image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                    >
-                      <p>Your profit calculations are fully accurate.</p>
-                    </EmptyState>
-                  ) : (
-                    <EmptyState
-                      heading="No products match"
-                      image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                    >
-                      <p>Try adjusting your filters.</p>
-                    </EmptyState>
-                  )
-                }
+        <DCard>
+          {filter === "missing" && (
+            <div style={{
+              padding: "10px 16px", borderBottom: `1px solid ${tokens.border}`,
+              background: tokens.warningBg,
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+            }}>
+              <span style={{ fontSize: "13px", fontWeight: 600, color: tokens.warning }}>
+                ⚠ Showing missing COGS only
+              </span>
+              <button
+                onClick={() => updateParam("filter", "all")}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.textMuted, textDecoration: "underline" }}
               >
-                {rowMarkup}
-              </IndexTable>
+                Show all
+              </button>
             </div>
+          )}
 
-            <div style={{ padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #ebebeb" }}>
-              <Select
-                label="Per page"
-                labelInline
-                options={[
-                  { label: "25", value: "25" },
-                  { label: "50", value: "50" },
-                  { label: "100", value: "100" },
-                ]}
-                value={String(pageSize)}
-                onChange={(val) => updateParam("pageSize", val)}
+          <div style={{ padding: "16px" }}>
+            <Filters
+              queryValue={searchValue}
+              filters={[]}
+              appliedFilters={appliedFilters}
+              onQueryChange={handleSearchChange}
+              onQueryClear={() => handleSearchChange("")}
+              onClearAll={() => { updateParam("filter", "all"); setSearchValue(""); }}
+              queryPlaceholder="Search by product name or SKU…"
+            />
+          </div>
+
+          <div style={{ opacity: isLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>
+            <IndexTable
+              resourceName={{ singular: "variant", plural: "variants" }}
+              itemCount={variants.length}
+              selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
+              onSelectionChange={handleSelectionChange}
+              promotedBulkActions={promotedBulkActions}
+              headings={[
+                { title: "Product & Variant" },
+                { title: "SKU" },
+                { title: "Shopify Cost" },
+                { title: "Custom Cost" },
+                { title: "Effective Cost" },
+              ]}
+              emptyState={
+                filter === "missing" && missingCogsCount === 0 ? (
+                  <EmptyState
+                    heading="All product costs are complete 🎉"
+                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                  >
+                    <p>Your profit calculations are fully accurate.</p>
+                  </EmptyState>
+                ) : (
+                  <EmptyState
+                    heading="No products match"
+                    image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                  >
+                    <p>Try adjusting your filters.</p>
+                  </EmptyState>
+                )
+              }
+            >
+              {rowMarkup}
+            </IndexTable>
+          </div>
+
+          {/* Pagination footer */}
+          <div style={{
+            padding: "12px 16px", borderTop: `1px solid ${tokens.border}`,
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+          }}>
+            <Select
+              label="Per page" labelInline
+              options={[{ label: "25", value: "25" }, { label: "50", value: "50" }, { label: "100", value: "100" }]}
+              value={String(pageSize)}
+              onChange={(val) => updateParam("pageSize", val)}
+            />
+            {totalPages > 1 && (
+              <Pagination
+                hasPrevious={page > 1}
+                onPrevious={() => updateParam("page", String(page - 1))}
+                hasNext={page < totalPages}
+                onNext={() => updateParam("page", String(page + 1))}
+                label={`Page ${page} of ${totalPages} · ${totalFilteredVariants} variants`}
               />
-              {totalPages > 1 && (
-                <Pagination
-                  hasPrevious={page > 1}
-                  onPrevious={() => updateParam("page", String(page - 1))}
-                  hasNext={page < totalPages}
-                  onNext={() => updateParam("page", String(page + 1))}
-                  label={`Page ${page} of ${totalPages} (${totalFilteredVariants} variants)`}
-                />
-              )}
-            </div>
-          </Card>
-        </Layout.Section>
-      </Layout>
+            )}
+          </div>
+        </DCard>
+
+      </div>
 
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} shop={shop} totalVariants={totalVariants} />
       <BulkCostModal

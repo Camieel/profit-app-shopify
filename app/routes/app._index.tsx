@@ -3,10 +3,8 @@ import { json, redirect } from "@remix-run/node";
 import { useLoaderData, useSubmit, useNavigation, useNavigate, useSearchParams } from "react-router";
 import { useState, useEffect, useCallback } from "react";
 import {
-  Page, Layout, Card, Text, Badge, Box, BlockStack, InlineStack,
-  Button, Banner, ResourceList, ResourceItem, EmptyState, Modal,
-  Checkbox, DataTable, SkeletonPage, SkeletonBodyText, SkeletonDisplayText, InlineGrid,
-  TextField,
+  Page, Layout, EmptyState, Modal, Checkbox, BlockStack, Text,
+  SkeletonPage, SkeletonBodyText, SkeletonDisplayText, Badge, Button, InlineStack,
 } from "@shopify/polaris";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -849,6 +847,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
+
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 const DISMISS_KEY = "cp_dismissed_actions";
 const DISMISS_TTL = 24 * 60 * 60 * 1000;
@@ -880,159 +879,116 @@ function useDismissed() {
   return { dismissed, snooze24h };
 }
 
-// ── Components ────────────────────────────────────────────────────────────────
-function DashboardSkeleton() {
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const tokens = {
+  profit: "#16a34a", profitBg: "#f0fdf4", profitBorder: "#bbf7d0",
+  loss: "#dc2626", lossBg: "#fef2f2", lossBorder: "#fecaca",
+  warning: "#d97706", warningBg: "#fffbeb", warningBorder: "#fde68a",
+  border: "#e2e8f0", cardBg: "#ffffff", pageBg: "#f8fafc",
+  text: "#0f172a", textMuted: "#64748b",
+};
+
+// ── Shared card wrapper ───────────────────────────────────────────────────────
+function DCard({ children, onClick, style }: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  style?: React.CSSProperties;
+}) {
   return (
-    <SkeletonPage title="Dashboard">
-      <Layout>
-        <Layout.Section><Card><BlockStack gap="400"><SkeletonDisplayText size="small" /><SkeletonBodyText lines={3} /></BlockStack></Card></Layout.Section>
-        <Layout.Section><Card><SkeletonBodyText lines={2} /></Card></Layout.Section>
-        <Layout.Section><Card><SkeletonBodyText lines={8} /></Card></Layout.Section>
-      </Layout>
-    </SkeletonPage>
+    <div
+      onClick={onClick}
+      style={{
+        background: tokens.cardBg,
+        border: `1px solid ${tokens.border}`,
+        borderRadius: "12px",
+        overflow: "hidden",
+        cursor: onClick ? "pointer" : undefined,
+        transition: onClick ? "box-shadow 0.15s, transform 0.15s" : undefined,
+        ...style,
+      }}
+      onMouseEnter={onClick ? (e) => {
+        (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)";
+        (e.currentTarget as HTMLDivElement).style.transform = "translateY(-1px)";
+      } : undefined}
+      onMouseLeave={onClick ? (e) => {
+        (e.currentTarget as HTMLDivElement).style.boxShadow = "none";
+        (e.currentTarget as HTMLDivElement).style.transform = "none";
+      } : undefined}
+    >
+      {children}
+    </div>
   );
 }
 
-const confidenceConfig: Record<Confidence, { text: string; color: string }> = {
-  high: { text: "High confidence", color: "#008060" },
-  medium: { text: "Medium confidence", color: "#b54708" },
-  low: { text: "Low confidence — some data missing", color: "#6b7280" },
-};
+function DCardHeader({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tokens.border}`, ...style }}>{children}</div>;
+}
 
+function DCardBody({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <div style={{ padding: "16px 20px", ...style }}>{children}</div>;
+}
+
+function DBadge({ children, variant = "default", size = "md" }: {
+  children: React.ReactNode;
+  variant?: "default" | "success" | "danger" | "warning" | "info" | "neutral";
+  size?: "sm" | "md";
+}) {
+  const colors: Record<string, { bg: string; color: string; border: string }> = {
+    default: { bg: "#f1f5f9", color: "#475569", border: "#e2e8f0" },
+    success: { bg: tokens.profitBg, color: tokens.profit, border: tokens.profitBorder },
+    danger:  { bg: tokens.lossBg, color: tokens.loss, border: tokens.lossBorder },
+    warning: { bg: tokens.warningBg, color: tokens.warning, border: tokens.warningBorder },
+    info:    { bg: "#eff6ff", color: "#2563eb", border: "#bfdbfe" },
+    neutral: { bg: "#f8fafc", color: tokens.textMuted, border: tokens.border },
+  };
+  const c = colors[variant];
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      padding: size === "sm" ? "2px 8px" : "3px 10px",
+      borderRadius: "100px",
+      fontSize: size === "sm" ? "11px" : "12px", fontWeight: 600,
+      background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function TrendArrow({ pct, positive }: { pct?: string; positive: boolean }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "2px", fontSize: "12px", fontWeight: 600, color: positive ? tokens.profit : tokens.loss }}>
+      {positive ? "↑" : "↓"}{pct ? ` ${pct}` : ""}
+    </span>
+  );
+}
+
+function DashboardSkeleton() {
+  const shimmer: React.CSSProperties = {
+    background: "linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)",
+    backgroundSize: "200% 100%", animation: "shimmer 1.5s infinite", borderRadius: "8px",
+  };
+  return (
+    <>
+      <style>{`@keyframes shimmer { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }`}</style>
+      <SkeletonPage title="Dashboard">
+        <Layout>
+          <Layout.Section><div style={{ height: 80, ...shimmer }} /></Layout.Section>
+          <Layout.Section><div style={{ height: 120, ...shimmer }} /></Layout.Section>
+          <Layout.Section><div style={{ height: 80, ...shimmer }} /></Layout.Section>
+          <Layout.Section><div style={{ height: 300, ...shimmer }} /></Layout.Section>
+        </Layout>
+      </SkeletonPage>
+    </>
+  );
+}
+
+// ── Action Center ─────────────────────────────────────────────────────────────
 const actionTypeIcons: Record<string, string> = {
   loss_due_to_ads: "📢", loss_due_to_cogs: "📦", loss_due_to_shipping: "🚚",
   loss_due_to_fees: "💳", loss_mixed: "⚖️", low_margin: "📉", high_expenses: "🏢",
 };
 
-// ── Revenue allocation bar ────────────────────────────────────────────────────
-function RevenueAllocationBar({ allocation }: { allocation: RevenueAllocation }) {
-  const { revenue, cogs, adSpend, shipping, fees, expenses, profit } = allocation;
-  if (revenue === 0) return null;
-
-  const pct = (n: number) => Math.max(0, (n / revenue) * 100);
-  const segments = [
-    { label: "COGS", value: cogs, color: "#f97316", pct: pct(cogs) },
-    { label: "Ad Spend", value: adSpend, color: "#a855f7", pct: pct(adSpend) },
-    { label: "Shipping", value: shipping, color: "#3b82f6", pct: pct(shipping) },
-    { label: "Fees", value: fees, color: "#6b7280", pct: pct(fees) },
-    { label: "Expenses", value: expenses, color: "#ef4444", pct: pct(expenses) },
-    { label: "Cash in Pocket", value: profit, color: "#22c55e", pct: pct(profit) },
-  ].filter((s) => s.pct > 0.5); // hide negligible segments
-
-  return (
-    <Card>
-      <BlockStack gap="300">
-        <InlineStack align="space-between" blockAlign="center">
-          <Text variant="headingMd" as="h2">Revenue Allocation</Text>
-          <Text variant="bodySm" as="p" tone="subdued">
-            {`Total revenue: ${fmtCurrency(revenue)}`}
-          </Text>
-        </InlineStack>
-        <div style={{ height: "24px", borderRadius: "6px", overflow: "hidden", display: "flex", gap: "2px" }}>
-          {segments.map((s) => (
-            <div
-              key={s.label}
-              style={{ width: `${s.pct}%`, background: s.color, minWidth: s.pct > 1 ? undefined : "2px" }}
-              title={`${s.label}: ${s.pct.toFixed(1)}%`}
-            />
-          ))}
-        </div>
-        <InlineStack gap="400" wrap>
-          {segments.map((s) => (
-            <InlineStack key={s.label} gap="100" blockAlign="center">
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
-              <Text variant="bodySm" as="span" tone="subdued">
-                {`${s.label} ${s.pct.toFixed(1)}%`}
-              </Text>
-            </InlineStack>
-          ))}
-        </InlineStack>
-      </BlockStack>
-    </Card>
-  );
-}
-
-// ── Product leaderboard ───────────────────────────────────────────────────────
-function ProductLeaderboard({ top, leaks }: { top: ProductStat[]; leaks: ProductStat[] }) {
-  const hasData = top.length > 0 || leaks.length > 0;
-  if (!hasData) return null;
-
-  return (
-    <Card padding="0">
-      <Box padding="400" borderBlockEndWidth="025" borderColor="border">
-        <InlineStack align="space-between" blockAlign="center">
-          <Text variant="headingMd" as="h2">Performance Leaderboard</Text>
-          <Text variant="bodySm" as="p" tone="subdued">Gross contribution per product</Text>
-        </InlineStack>
-      </Box>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr" }}>
-        {/* Top performers */}
-        <div style={{ padding: "16px 20px" }}>
-          <Text variant="bodySm" as="p" tone="subdued" fontWeight="semibold">
-            TOP PERFORMING
-          </Text>
-          <div style={{ marginTop: "12px" }}>
-            <BlockStack gap="200">
-            {top.length === 0 ? (
-              <Text variant="bodySm" as="p" tone="subdued">No data yet</Text>
-            ) : top.map((p, i) => (
-              <InlineStack key={p.title} align="space-between" blockAlign="center">
-                <InlineStack gap="200" blockAlign="center">
-                  <div style={{
-                    width: 24, height: 24, borderRadius: "50%",
-                    background: "#f0fdf8", border: "1px solid #b3e8d8",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "11px", fontWeight: 700, color: "#008060", flexShrink: 0,
-                  }}>
-                    {i + 1}
-                  </div>
-                  <div style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <Text variant="bodySm" as="span">{p.title}</Text>
-                  </div>
-                </InlineStack>
-                <Text variant="bodySm" as="span" tone="success" fontWeight="semibold">
-                  {`+${fmtCurrency(p.profit)}`}
-                </Text>
-              </InlineStack>
-            ))}
-            </BlockStack>
-          </div>
-        </div>
-
-        {/* Divider */}
-        <div style={{ background: "#e5e7eb" }} />
-
-        {/* Profit leaks */}
-        <div style={{ padding: "16px 20px" }}>
-          <Text variant="bodySm" as="p" tone="subdued" fontWeight="semibold">
-            PROFIT LEAKS
-          </Text>
-          <div style={{ marginTop: "12px" }}>
-            <BlockStack gap="200">
-            {leaks.length === 0 ? (
-              <Text variant="bodySm" as="p" tone="success">No loss-making products 🎉</Text>
-            ) : leaks.map((p) => (
-              <InlineStack key={p.title} align="space-between" blockAlign="center">
-                <InlineStack gap="200" blockAlign="center">
-                  <span style={{ fontSize: "14px" }}>⚠️</span>
-                  <div style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <Text variant="bodySm" as="span">{p.title}</Text>
-                  </div>
-                </InlineStack>
-                <Text variant="bodySm" as="span" tone="critical" fontWeight="semibold">
-                  {fmtCurrency(p.profit)}
-                </Text>
-              </InlineStack>
-            ))}
-            </BlockStack>
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-// ── Action Center ─────────────────────────────────────────────────────────────
 function ActionCenter({ actionCenter, missingCogsCount }: {
   actionCenter: ActionCenterState;
   missingCogsCount: number;
@@ -1042,136 +998,138 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
   const { dismissed, snooze24h } = useDismissed();
   const visibleItems = items.filter((i) => !dismissed.includes(i.type));
 
-  const borderColor = state === "critical" ? "#ffa39e" : state === "warning" ? "#ffe58f" : "#b7eb8f";
-  const headerBg = state === "critical" ? "#fff1f0" : state === "warning" ? "#fffbe6" : "#f6ffed";
-  const icon = state === "critical" ? "🔴" : state === "warning" ? "⚠️" : "✅";
+  const stateConfig = {
+    critical: { border: tokens.lossBorder, bg: tokens.lossBg, icon: "🔴", label: "Action required", labelColor: tokens.loss },
+    warning:  { border: tokens.warningBorder, bg: tokens.warningBg, icon: "⚠️", label: "Attention needed", labelColor: tokens.warning },
+    healthy:  { border: tokens.profitBorder, bg: tokens.profitBg, icon: "✅", label: "You're on track", labelColor: tokens.profit },
+  }[state];
 
   return (
-    <div style={{ border: `1px solid ${borderColor}`, borderRadius: "12px", overflow: "hidden" }}>
-      {/* ── Header: status + hero insight ── */}
-      <div style={{ background: headerBg, padding: "16px 20px", borderBottom: visibleItems.length > 0 ? `1px solid ${borderColor}` : undefined }}>
-        <InlineStack align="space-between" blockAlign="center">
-          <InlineStack gap="200" blockAlign="center">
-            <span style={{ fontSize: "18px" }}>{icon}</span>
-            <BlockStack gap="0">
-              <Text variant="headingSm" as="h2">
-                {state === "healthy" ? "You're on track" : state === "critical" ? "Action required" : "Attention needed"}
-              </Text>
-              <Text variant="bodySm" as="p" tone={state === "critical" ? "critical" : state === "warning" ? "caution" : "subdued"}>
+    <DCard style={{ border: `1px solid ${stateConfig.border}` }}>
+      {/* Header */}
+      <div style={{ background: stateConfig.bg, padding: "16px 20px", borderBottom: visibleItems.length > 0 ? `1px solid ${stateConfig.border}` : undefined }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1 }}>
+            <span style={{ fontSize: "18px" }}>{stateConfig.icon}</span>
+            <div>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: tokens.text }}>{stateConfig.label}</p>
+              <p style={{ margin: 0, fontSize: "13px", color: state === "healthy" ? tokens.textMuted : stateConfig.labelColor, marginTop: "2px" }}>
                 {heroInsight}
-              </Text>
-            </BlockStack>
-          </InlineStack>
-          {/* Loss breakdown bar — compact, in header */}
+              </p>
+            </div>
+          </div>
+          {/* Loss breakdown mini-bar */}
           {lossBreakdown && state === "critical" && (
-            <div style={{ minWidth: "200px" }}>
-              <div style={{ display: "flex", gap: "2px", borderRadius: "4px", overflow: "hidden", height: "6px", marginBottom: "4px" }}>
+            <div style={{ flexShrink: 0 }}>
+              <div style={{ display: "flex", gap: "2px", borderRadius: "4px", overflow: "hidden", height: "6px", width: "180px", marginBottom: "4px" }}>
                 {[
                   { key: "ads", color: "#ef4444" },
                   { key: "cogs", color: "#f97316" },
                   { key: "shipping", color: "#eab308" },
-                  { key: "fees", color: "#6b7280" },
+                  { key: "fees", color: "#94a3b8" },
                 ].map(({ key, color }) => {
                   const val = lossBreakdown[key as keyof typeof lossBreakdown] as number;
                   const pct = lossBreakdown.total > 0 ? (val / lossBreakdown.total) * 100 : 0;
-                  return pct > 0 ? (
+                  return pct > 1 ? (
                     <div key={key} style={{ width: `${pct}%`, background: color }} title={`${key}: ${pct.toFixed(0)}%`} />
                   ) : null;
                 })}
               </div>
-              <InlineStack gap="200" blockAlign="center" wrap>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                 {[
                   { key: "ads", color: "#ef4444", label: "Ads" },
                   { key: "cogs", color: "#f97316", label: "COGS" },
-                  { key: "shipping", color: "#eab308", label: "Shipping" },
-                  { key: "fees", color: "#6b7280", label: "Fees" },
+                  { key: "shipping", color: "#eab308", label: "Ship." },
+                  { key: "fees", color: "#94a3b8", label: "Fees" },
                 ].map(({ key, color, label }) => {
                   const val = lossBreakdown[key as keyof typeof lossBreakdown] as number;
                   const pct = lossBreakdown.total > 0 ? (val / lossBreakdown.total) * 100 : 0;
-                  return pct > 0 ? (
-                    <InlineStack key={key} gap="050" blockAlign="center">
-                      <div style={{ width: 6, height: 6, background: color, borderRadius: "50%", flexShrink: 0 }} />
-                      <Text variant="bodySm" as="span" tone="subdued">{label} {pct.toFixed(0)}%</Text>
-                    </InlineStack>
+                  return pct > 1 ? (
+                    <span key={key} style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "11px", color: tokens.textMuted }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, display: "inline-block", flexShrink: 0 }} />
+                      {label} {pct.toFixed(0)}%
+                    </span>
                   ) : null;
                 })}
-              </InlineStack>
+              </div>
             </div>
           )}
-        </InlineStack>
+        </div>
       </div>
 
-      {/* ── Action items — one primary CTA per item, dismiss as × icon ── */}
+      {/* Action items */}
       {visibleItems.length > 0 && (
-        <div style={{ background: "#ffffff" }}>
+        <div>
           {visibleItems.map((item, i) => {
-            const typeIcon = actionTypeIcons[item.type] ?? "•";
-            // Primary action = first action marked primary
             const primaryAction = item.actions.find((a) => a.primary) ?? item.actions[0];
-            // Secondary actions become text links below description
             const secondaryActions = item.actions.filter((a) => !a.primary);
+            const typeIcon = actionTypeIcons[item.type] ?? "•";
 
             return (
               <div
                 key={item.type}
                 style={{
-                  padding: "16px 20px",
-                  borderBottom: i < visibleItems.length - 1 ? "1px solid #f5f5f5" : undefined,
+                  padding: "14px 20px",
+                  borderBottom: i < visibleItems.length - 1 ? `1px solid ${tokens.border}` : undefined,
                   position: "relative",
                 }}
               >
-                {/* Dismiss × — top right, subtle */}
+                {/* Dismiss button */}
                 <button
                   onClick={() => snooze24h(item.type)}
-                  title="Dismiss for 24 hours"
+                  title="Dismiss for 24h"
                   style={{
-                    position: "absolute", top: "12px", right: "16px",
+                    position: "absolute", top: "10px", right: "14px",
                     background: "none", border: "none", cursor: "pointer",
-                    fontSize: "16px", color: "#9ca3af", lineHeight: 1, padding: "2px 4px",
+                    fontSize: "18px", color: "#cbd5e1", lineHeight: 1, padding: "2px 4px",
+                    transition: "color 0.1s",
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "#94a3b8")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "#cbd5e1")}
                 >
                   ×
                 </button>
 
-                <InlineStack gap="300" blockAlign="start">
-                  {/* Type icon */}
+                <div style={{ display: "flex", gap: "12px", alignItems: "flex-start", paddingRight: "24px" }}>
+                  {/* Icon */}
                   <div style={{
                     width: 32, height: 32, borderRadius: "8px", flexShrink: 0,
-                    background: item.severity === "critical" ? "#fff1f0" : item.severity === "warning" ? "#fffbe6" : "#f0f9ff",
-                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px",
+                    background: item.severity === "critical" ? tokens.lossBg : item.severity === "warning" ? tokens.warningBg : "#eff6ff",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px",
                   }}>
                     {typeIcon}
                   </div>
 
                   {/* Content */}
-                  <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <InlineStack gap="200" blockAlign="center">
-                      <Text variant="bodyMd" fontWeight="semibold" as="p">{item.title}</Text>
-                      <Badge
-                        tone={item.severity === "critical" ? "critical" : item.severity === "warning" ? "warning" : "info"}
-                        size="small"
-                      >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "14px", fontWeight: 600, color: tokens.text }}>{item.title}</span>
+                      <DBadge variant={item.severity === "critical" ? "danger" : item.severity === "warning" ? "warning" : "info"} size="sm">
                         {item.timeToFix}
-                      </Badge>
-                    </InlineStack>
-
-                    {/* Description + impact in one paragraph */}
-                    <Text variant="bodySm" as="p" tone="subdued">
+                      </DBadge>
+                    </div>
+                    <p style={{ margin: "0 0 8px", fontSize: "13px", color: tokens.textMuted, lineHeight: "1.5" }}>
                       {item.description}
-                      {item.potentialRecovery != null && item.potentialRecovery > 0 &&
-                        ` Potential recovery: ~${fmtK(item.potentialRecovery)}/week.`}
-                    </Text>
-
-                    {/* Action row: ONE primary button + text links for secondary */}
-                    <InlineStack gap="300" blockAlign="center">
+                      {item.potentialRecovery != null && item.potentialRecovery > 0 && (
+                        <span style={{ color: tokens.profit, fontWeight: 500 }}>{` Potential recovery: ~${fmtK(item.potentialRecovery)}/week.`}</span>
+                      )}
+                    </p>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                       {primaryAction && (
-                        <Button
-                          variant="primary"
-                          size="slim"
+                        <button
                           onClick={() => navigate(primaryAction.url)}
+                          style={{
+                            padding: "6px 14px", borderRadius: "8px",
+                            background: "#0f172a", color: "#ffffff",
+                            border: "none", cursor: "pointer",
+                            fontSize: "13px", fontWeight: 600,
+                            transition: "background 0.15s",
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "#1e293b")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "#0f172a")}
                         >
                           {primaryAction.label}
-                        </Button>
+                        </button>
                       )}
                       {secondaryActions.map((a) => (
                         <button
@@ -1179,28 +1137,42 @@ function ActionCenter({ actionCenter, missingCogsCount }: {
                           onClick={() => navigate(a.url)}
                           style={{
                             background: "none", border: "none", cursor: "pointer",
-                            fontSize: "13px", color: "#6b7280", textDecoration: "underline",
-                            padding: 0,
+                            fontSize: "13px", color: tokens.textMuted,
+                            textDecoration: "underline", padding: 0,
+                            transition: "color 0.1s",
                           }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = tokens.text)}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = tokens.textMuted)}
                         >
                           {a.label}
                         </button>
                       ))}
-                    </InlineStack>
+                    </div>
                   </div>
-                </InlineStack>
+                </div>
               </div>
             );
           })}
         </div>
       )}
-    </div>
+    </DCard>
   );
 }
 
 // ── KPI strip ─────────────────────────────────────────────────────────────────
 function KpiStrip({ metrics, extended }: { metrics: KpiMetric[]; extended: ExtendedKpis }) {
+  const navigate = useNavigate();
   const [showExtended, setShowExtended] = useState(false);
+
+  // Map KPI labels to drill-down URLs
+  const kpiUrls: Record<string, string> = {
+    "Net Profit": "/app/orders?profitability=loss",
+    "Revenue": "/app/orders",
+    "Avg Margin": "/app/orders?profitability=all",
+    "Orders": "/app/orders",
+    "Ad Spend": "/app/ads",
+    "Fixed Expenses": "/app/expenses",
+  };
 
   const extraMetrics = [
     { label: "Units Sold", value: String(extended.unitsSold), sub: "in period", critical: false },
@@ -1212,87 +1184,249 @@ function KpiStrip({ metrics, extended }: { metrics: KpiMetric[]; extended: Exten
   ];
 
   return (
-    <Card>
-      <BlockStack gap="0">
-        <div style={{ display: "flex", overflowX: "auto" }}>
-          {metrics.map((m, i) => (
+    <DCard>
+      {/* Primary metrics */}
+      <div style={{ display: "flex", overflowX: "auto" }}>
+        {metrics.map((m, i) => {
+          const url = kpiUrls[m.label];
+          return (
+            <div
+              key={m.label}
+              onClick={url ? () => navigate(url) : undefined}
+              style={{
+                flex: "1 1 0", minWidth: "140px",
+                padding: "18px 20px",
+                borderRight: i < metrics.length - 1 ? `1px solid ${tokens.border}` : undefined,
+                background: m.highlighted ? "#fffbeb" : tokens.cardBg,
+                cursor: url ? "pointer" : "default",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={url ? (e) => ((e.currentTarget as HTMLDivElement).style.background = "#f8fafc") : undefined}
+              onMouseLeave={url ? (e) => ((e.currentTarget as HTMLDivElement).style.background = m.highlighted ? "#fffbeb" : tokens.cardBg) : undefined}
+            >
+              <div style={{ marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ fontSize: "12px", fontWeight: 500, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  {m.label}
+                </span>
+                {m.highlighted && <span style={{ fontSize: "10px" }}>⚠️</span>}
+                {url && <span style={{ fontSize: "10px", color: "#cbd5e1", marginLeft: "auto" }}>→</span>}
+              </div>
+              <p style={{
+                margin: "0 0 4px",
+                fontSize: "24px", fontWeight: 700,
+                color: !m.trendPositive && m.trend !== "neutral" ? tokens.loss : tokens.text,
+                letterSpacing: "-0.02em",
+              }}>
+                {m.value}
+              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                {m.trend !== "neutral" && (
+                  <TrendArrow pct="" positive={m.trendPositive} />
+                )}
+                <span style={{ fontSize: "12px", color: tokens.textMuted }}>{m.sub}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Extended metrics */}
+      {showExtended && (
+        <div style={{ borderTop: `1px solid ${tokens.border}`, display: "flex", overflowX: "auto", background: "#f8fafc" }}>
+          {extraMetrics.map((m, i) => (
             <div
               key={m.label}
               style={{
-                flex: "1 1 0", minWidth: "140px", padding: "16px 20px",
-                borderRight: i < metrics.length - 1 ? "1px solid #e5e7eb" : undefined,
-                background: m.highlighted ? "#fff7ed" : undefined,
+                flex: "1 1 0", minWidth: "130px", padding: "14px 20px",
+                borderRight: i < extraMetrics.length - 1 ? `1px solid ${tokens.border}` : undefined,
               }}
             >
-              <BlockStack gap="100">
-                <InlineStack gap="100" blockAlign="center">
-                  <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
-                  {m.highlighted && <span style={{ fontSize: "10px" }}>⚠️</span>}
-                </InlineStack>
-                <Text variant="headingLg" as="p" tone={!m.trendPositive && m.trend !== "neutral" ? "critical" : undefined}>
-                  {m.value}
-                </Text>
-                <InlineStack gap="100" blockAlign="center">
-                  {m.trend !== "neutral" && (
-                    <span style={{ fontSize: "12px", color: m.trendPositive ? "#008060" : "#d92d20" }}>
-                      {m.trend === "up" ? "↑" : "↓"}
-                    </span>
-                  )}
-                  <Text variant="bodySm" as="span" tone="subdued">{m.sub}</Text>
-                </InlineStack>
-              </BlockStack>
+              <p style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: 500, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                {m.label}
+              </p>
+              <p style={{ margin: "0 0 2px", fontSize: "18px", fontWeight: 700, color: m.critical ? tokens.loss : tokens.text, letterSpacing: "-0.01em" }}>
+                {m.value}
+              </p>
+              <p style={{ margin: 0, fontSize: "12px", color: tokens.textMuted }}>{m.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Toggle */}
+      <button
+        onClick={() => setShowExtended(v => !v)}
+        style={{
+          width: "100%", padding: "10px 20px",
+          background: "none", border: "none", borderTop: `1px solid ${tokens.border}`,
+          cursor: "pointer", textAlign: "left",
+          fontSize: "13px", color: tokens.textMuted, fontWeight: 500,
+          display: "flex", alignItems: "center", gap: "6px",
+          transition: "color 0.1s",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = tokens.text)}
+        onMouseLeave={(e) => (e.currentTarget.style.color = tokens.textMuted)}
+      >
+        <span>{showExtended ? "▲" : "▼"}</span>
+        {showExtended ? "Hide extended metrics" : "View extended metrics"}
+      </button>
+    </DCard>
+  );
+}
+
+// ── Revenue allocation bar ────────────────────────────────────────────────────
+function RevenueAllocationBar({ allocation }: { allocation: RevenueAllocation }) {
+  const { revenue, cogs, adSpend, shipping, fees, expenses, profit } = allocation;
+  if (revenue === 0) return null;
+
+  const pct = (n: number) => Math.max(0, (n / revenue) * 100);
+  const segments = [
+    { label: "COGS",          value: cogs,      color: "#f97316", pct: pct(cogs) },
+    { label: "Ad Spend",      value: adSpend,   color: "#a855f7", pct: pct(adSpend) },
+    { label: "Shipping",      value: shipping,  color: "#3b82f6", pct: pct(shipping) },
+    { label: "Fees",          value: fees,      color: "#94a3b8", pct: pct(fees) },
+    { label: "Expenses",      value: expenses,  color: "#ef4444", pct: pct(expenses) },
+    { label: "Cash in Pocket",value: profit,    color: "#16a34a", pct: pct(profit) },
+  ].filter((s) => s.pct > 0.5);
+
+  return (
+    <DCard>
+      <DCardBody>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
+          <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: tokens.text }}>Revenue Allocation</p>
+          <span style={{ fontSize: "13px", color: tokens.textMuted }}>Total: {fmtCurrency(revenue)}</span>
+        </div>
+        <div style={{ height: "20px", borderRadius: "6px", overflow: "hidden", display: "flex", gap: "2px", marginBottom: "12px" }}>
+          {segments.map((s) => (
+            <div
+              key={s.label}
+              style={{ width: `${s.pct}%`, background: s.color, transition: "width 0.3s" }}
+              title={`${s.label}: ${s.pct.toFixed(1)}% (${fmtCurrency(s.value)})`}
+            />
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+          {segments.map((s) => (
+            <div key={s.label} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0, display: "inline-block" }} />
+              <span style={{ fontSize: "12px", color: tokens.textMuted }}>{s.label}</span>
+              <span style={{ fontSize: "12px", fontWeight: 600, color: tokens.text }}>{s.pct.toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
+      </DCardBody>
+    </DCard>
+  );
+}
+
+// ── Product leaderboard ───────────────────────────────────────────────────────
+function ProductLeaderboard({ top, leaks }: { top: ProductStat[]; leaks: ProductStat[] }) {
+  const navigate = useNavigate();
+  if (top.length === 0 && leaks.length === 0) return null;
+
+  return (
+    <DCard>
+      <DCardHeader>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: tokens.text }}>Performance Leaderboard</p>
+          <span style={{ fontSize: "12px", color: tokens.textMuted }}>Gross contribution · last period</span>
+        </div>
+      </DCardHeader>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr" }}>
+        {/* Top performers */}
+        <div style={{ padding: "16px 20px" }}>
+          <p style={{ margin: "0 0 12px", fontSize: "11px", fontWeight: 700, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            🏆 Top Performing
+          </p>
+          {top.length === 0 ? (
+            <p style={{ margin: 0, fontSize: "13px", color: tokens.textMuted }}>No data yet</p>
+          ) : top.map((p, i) => (
+            <div
+              key={p.title}
+              onClick={() => navigate(`/app/orders?profitability=all&search=${encodeURIComponent(p.title)}`)}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "6px 8px", borderRadius: "8px", marginBottom: "4px",
+                cursor: "pointer", transition: "background 0.1s",
+              }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = "#f8fafc")}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = "transparent")}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                <span style={{
+                  width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                  background: tokens.profitBg, border: `1px solid ${tokens.profitBorder}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: "11px", fontWeight: 700, color: tokens.profit,
+                }}>{i + 1}</span>
+                <span style={{ fontSize: "13px", color: tokens.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p.title}
+                </span>
+              </div>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: tokens.profit, flexShrink: 0, marginLeft: "8px" }}>
+                +{fmtCurrency(p.profit)}
+              </span>
             </div>
           ))}
         </div>
 
-        {showExtended && (
-          <div style={{ borderTop: "1px solid #e5e7eb", display: "flex", overflowX: "auto" }}>
-            {extraMetrics.map((m, i) => (
-              <div
-                key={m.label}
-                style={{
-                  flex: "1 1 0", minWidth: "140px", padding: "14px 20px",
-                  borderRight: i < extraMetrics.length - 1 ? "1px solid #e5e7eb" : undefined,
-                  background: "#f9fafb",
-                }}
-              >
-                <BlockStack gap="100">
-                  <Text variant="bodySm" as="p" tone="subdued">{m.label}</Text>
-                  <Text variant="headingMd" as="p" tone={m.critical ? "critical" : undefined}>{m.value}</Text>
-                  <Text variant="bodySm" as="p" tone="subdued">{m.sub}</Text>
-                </BlockStack>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Divider */}
+        <div style={{ background: tokens.border }} />
 
-        <div style={{ padding: "10px 20px", borderTop: "1px solid #e5e7eb" }}>
-          <Button
-            variant="plain"
-            onClick={() => setShowExtended((v) => !v)}
-            disclosure={showExtended ? "up" : "down"}
-          >
-            {showExtended ? "Hide extended metrics" : "View extended metrics"}
-          </Button>
+        {/* Leaks */}
+        <div style={{ padding: "16px 20px" }}>
+          <p style={{ margin: "0 0 12px", fontSize: "11px", fontWeight: 700, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            ⚠️ Profit Leaks
+          </p>
+          {leaks.length === 0 ? (
+            <p style={{ margin: 0, fontSize: "13px", color: tokens.profit }}>No loss-making products 🎉</p>
+          ) : leaks.map((p) => (
+            <div
+              key={p.title}
+              onClick={() => navigate(`/app/orders?profitability=loss&search=${encodeURIComponent(p.title)}`)}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "6px 8px", borderRadius: "8px", marginBottom: "4px",
+                cursor: "pointer", transition: "background 0.1s",
+              }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = "#fef2f2")}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = "transparent")}
+            >
+              <span style={{ fontSize: "13px", color: tokens.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {p.title}
+              </span>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: tokens.loss, flexShrink: 0, marginLeft: "8px" }}>
+                {fmtCurrency(p.profit)}
+              </span>
+            </div>
+          ))}
         </div>
-      </BlockStack>
-    </Card>
+      </div>
+    </DCard>
   );
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
-interface TooltipProps { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string; }
-
-function ChartTooltip({ active, payload, label }: TooltipProps) {
+function ChartTooltipCustom({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  const profit = payload.find((p) => p.name === "profit")?.value ?? 0;
-  const revenue = payload.find((p) => p.name === "revenue")?.value ?? 0;
+  const profit = payload.find((p: any) => p.name === "profit")?.value ?? 0;
+  const revenue = payload.find((p: any) => p.name === "revenue")?.value ?? 0;
   return (
-    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 16px", fontSize: "13px", boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}>
-      <p style={{ fontWeight: 700, marginBottom: 6, color: "#111827" }}>{label}</p>
-      <p style={{ color: profit < 0 ? "#d92d20" : "#008060", marginBottom: 2 }}>Profit: {fmtCurrency(profit)}</p>
-      <p style={{ color: "#6b7280" }}>Revenue: {fmtCurrency(revenue)}</p>
-      {profit < 0 && <p style={{ color: "#d92d20", fontSize: "11px", marginTop: 6, fontWeight: 600 }}>📉 Click to view loss orders</p>}
+    <div style={{
+      background: "#fff", border: `1px solid ${tokens.border}`,
+      borderRadius: "10px", padding: "12px 16px",
+      fontSize: "13px", boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+    }}>
+      <p style={{ margin: "0 0 8px", fontWeight: 700, color: tokens.text }}>{label}</p>
+      <p style={{ margin: "0 0 3px", color: profit < 0 ? tokens.loss : tokens.profit }}>
+        Profit: <strong>{fmtCurrency(profit)}</strong>
+      </p>
+      <p style={{ margin: 0, color: tokens.textMuted }}>Revenue: {fmtCurrency(revenue)}</p>
+      {profit < 0 && (
+        <p style={{ margin: "6px 0 0", fontSize: "11px", color: tokens.loss, fontWeight: 600 }}>
+          📉 Click to view loss orders
+        </p>
+      )}
     </div>
   );
 }
@@ -1302,109 +1436,174 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const lossDays = chartData.filter((d) => d.isLoss);
-  if (!mounted) return <Box minHeight="280px" />;
+  if (!mounted) return <div style={{ height: "300px", background: "#f8fafc", borderRadius: "12px" }} />;
 
   return (
-    <Card>
-      <BlockStack gap="400">
-        <InlineStack align="space-between" blockAlign="center">
-          <BlockStack gap="0">
-            <Text variant="headingMd" as="h2">Profit stability</Text>
-            <Text variant="bodySm" as="p" tone="subdued">Selected period · Click red dots to view loss orders</Text>
-          </BlockStack>
+    <DCard>
+      <DCardHeader>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: tokens.text }}>Profit Stability</p>
+            <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.textMuted }}>Click red dots to drill into loss days</p>
+          </div>
           {lossDays.length > 0 && (
-            <Badge tone="critical">{`${lossDays.length} loss day${lossDays.length > 1 ? "s" : ""}`}</Badge>
+            <DBadge variant="danger">{`${lossDays.length} loss day${lossDays.length > 1 ? "s" : ""}`}</DBadge>
           )}
-        </InlineStack>
-        <Box minHeight="260px">
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b7280" }} interval={Math.max(1, Math.floor(chartData.length / 8))} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} tickFormatter={(v) => "$" + v} axisLine={false} tickLine={false} />
-              <Tooltip content={<ChartTooltip />} />
-              <Line type="monotone" dataKey="revenue" stroke="#e5e7eb" strokeWidth={2} dot={false} strokeDasharray="4 4" name="revenue" />
-              <Line type="monotone" dataKey="profit" stroke="#008060" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} name="profit" />
-              <ReferenceLine y={0} stroke="#d92d20" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: "Break even", position: "right", fontSize: 10, fill: "#d92d20" }} />
-              {lossDays.map((d) => (
-                <ReferenceDot
-                  key={d.dateKey} x={d.date} y={d.profit} r={6}
-                  fill="#d92d20" stroke="white" strokeWidth={2}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => navigate(`/app/orders?from=${d.dateKey}&to=${d.dateKey}&profitability=loss`)}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </Box>
-        <InlineStack gap="400" align="center">
-          <InlineStack gap="100" blockAlign="center">
-            <div style={{ width: 12, height: 3, background: "#008060", borderRadius: 2 }} />
-            <Text variant="bodySm" as="span" tone="subdued">Net Profit</Text>
-          </InlineStack>
-          <InlineStack gap="100" blockAlign="center">
-            <div style={{ width: 12, height: 3, background: "#e5e7eb", borderRadius: 2 }} />
-            <Text variant="bodySm" as="span" tone="subdued">Revenue</Text>
-          </InlineStack>
-          <InlineStack gap="100" blockAlign="center">
-            <div style={{ width: 10, height: 10, background: "#d92d20", borderRadius: "50%" }} />
-            <Text variant="bodySm" as="span" tone="subdued">Loss day</Text>
-          </InlineStack>
-        </InlineStack>
-      </BlockStack>
-    </Card>
+        </div>
+      </DCardHeader>
+      <DCardBody>
+        <ResponsiveContainer width="100%" height={240}>
+          <LineChart data={chartData} margin={{ top: 8, right: 20, left: 0, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: tokens.textMuted }} interval={Math.max(1, Math.floor(chartData.length / 8))} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 11, fill: tokens.textMuted }} tickFormatter={(v) => "$" + v} axisLine={false} tickLine={false} />
+            <Tooltip content={<ChartTooltipCustom />} />
+            <Line type="monotone" dataKey="revenue" stroke="#e2e8f0" strokeWidth={2} dot={false} strokeDasharray="4 4" name="revenue" />
+            <Line type="monotone" dataKey="profit" stroke={tokens.profit} strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: tokens.profit }} name="profit" />
+            <ReferenceLine y={0} stroke={tokens.loss} strokeDasharray="5 3" strokeWidth={1} label={{ value: "Break even", position: "right", fontSize: 10, fill: tokens.loss }} />
+            {lossDays.map((d) => (
+              <ReferenceDot
+                key={d.dateKey} x={d.date} y={d.profit} r={6}
+                fill={tokens.loss} stroke="white" strokeWidth={2}
+                style={{ cursor: "pointer" }}
+                onClick={() => navigate(`/app/orders?from=${d.dateKey}&to=${d.dateKey}&profitability=loss`)}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+        {/* Legend */}
+        <div style={{ display: "flex", gap: "20px", justifyContent: "center", marginTop: "12px" }}>
+          {[
+            { color: tokens.profit, label: "Net Profit", dashed: false },
+            { color: "#e2e8f0", label: "Revenue", dashed: true },
+            { color: tokens.loss, label: "Loss day", circle: true },
+          ].map((l) => (
+            <div key={l.label} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              {l.circle
+                ? <span style={{ width: 8, height: 8, borderRadius: "50%", background: l.color, display: "inline-block" }} />
+                : <span style={{ width: 16, height: 2, background: l.color, display: "inline-block", borderRadius: 2 }} />
+              }
+              <span style={{ fontSize: "12px", color: tokens.textMuted }}>{l.label}</span>
+            </div>
+          ))}
+        </div>
+      </DCardBody>
+    </DCard>
   );
 }
 
 // ── Priority Orders ───────────────────────────────────────────────────────────
 function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: string }) {
+  const navigate = useNavigate();
   const needsAttention = orders.filter((o) => o.netProfit < 0 || o.marginPercent < 10);
+
   return (
-    <Card padding="0">
-      <Box padding="400" borderBlockEndWidth="025" borderColor="border">
-        <InlineStack align="space-between" blockAlign="center">
-          <BlockStack gap="0">
-            <Text variant="headingMd" as="h2">Needs attention</Text>
-            <Text variant="bodySm" as="p" tone="subdued">Worst orders first — selected period</Text>
-          </BlockStack>
-          {needsAttention.length > 0 && (
-            <Badge tone="critical">{`${needsAttention.length} orders`}</Badge>
-          )}
-        </InlineStack>
-      </Box>
+    <DCard>
+      <DCardHeader>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: tokens.text }}>Needs Attention</p>
+            <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.textMuted }}>Worst orders first</p>
+          </div>
+          {needsAttention.length > 0 && <DBadge variant="danger">{`${needsAttention.length} orders`}</DBadge>}
+        </div>
+      </DCardHeader>
+
       {orders.length === 0 ? (
-        <Box padding="400"><Text as="p" tone="subdued">No orders yet.</Text></Box>
+        <DCardBody>
+          <p style={{ margin: 0, fontSize: "13px", color: tokens.textMuted }}>No orders yet.</p>
+        </DCardBody>
       ) : (
-        <DataTable
-          columnContentTypes={["text", "numeric", "text", "text", "text"]}
-          headings={["Order", "Net Profit", "Margin", "Top Cost", "Action"]}
-          rows={orders.map((o) => [
-            <Button key={o.id} variant="plain" url={getShopifyOrderUrl(shop, o.shopifyOrderId)} external>
-              {o.shopifyOrderName}
-            </Button>,
-            <Text as="span" tone={o.netProfit < 0 ? "critical" : undefined} fontWeight="semibold" key={o.id + "-p"}>
-              {fmtCurrency(o.netProfit, o.currency)}
-            </Text>,
-            o.cogsComplete
-              ? <Badge key={o.id + "-m"} tone={o.marginPercent < 0 ? "critical" : o.marginPercent < 10 ? "warning" : "success"}>{o.marginPercent.toFixed(1) + "%"}</Badge>
-              : <Badge key={o.id + "-m"} tone="attention">Incomplete</Badge>,
-            <InlineStack key={o.id + "-r"} gap="100" blockAlign="center">
-              <Text variant="bodySm" as="span" tone="subdued">{o.topCostReason}</Text>
-              {o.repeatLossCount >= 3 && o.netProfit < 0 && <Badge tone="critical">{`×${o.repeatLossCount}`}</Badge>}
-              {o.repeatLossCount >= 2 && o.repeatLossCount < 3 && o.netProfit < 0 && <Badge tone="warning">{`×${o.repeatLossCount}`}</Badge>}
-            </InlineStack>,
-            o.isHeld
-              ? <Badge key={o.id + "-s"} tone="warning">On Hold</Badge>
-              : o.financialStatus === "refunded"
-              ? <Badge key={o.id + "-s"} tone="critical">Refunded</Badge>
-              : <Button key={o.id + "-s"} variant="plain" url={getShopifyOrderUrl(shop, o.shopifyOrderId)} external size="slim">Review ↗</Button>,
-          ])}
-        />
+        <>
+          {/* Table header */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr 90px 70px 80px 80px",
+            padding: "8px 16px",
+            background: "#f8fafc",
+            borderBottom: `1px solid ${tokens.border}`,
+          }}>
+            {["Order", "Net Profit", "Margin", "Top Cost", "Action"].map((h) => (
+              <span key={h} style={{ fontSize: "11px", fontWeight: 700, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                {h}
+              </span>
+            ))}
+          </div>
+
+          {/* Rows */}
+          {orders.map((o) => (
+            <div
+              key={o.id}
+              style={{
+                display: "grid", gridTemplateColumns: "1fr 90px 70px 80px 80px",
+                padding: "10px 16px",
+                borderBottom: `1px solid ${tokens.border}`,
+                background: o.netProfit < 0 ? "#fef2f2" : o.cogsComplete === false ? "#fffbeb" : "#ffffff",
+                transition: "background 0.1s",
+                alignItems: "center",
+              }}
+              onMouseEnter={(e) => {
+                if (o.netProfit >= 0 && o.cogsComplete !== false) {
+                  (e.currentTarget as HTMLDivElement).style.background = "#f8fafc";
+                }
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLDivElement).style.background = o.netProfit < 0 ? "#fef2f2" : o.cogsComplete === false ? "#fffbeb" : "#ffffff";
+              }}
+            >
+              {/* Order name */}
+              <a
+                href={getShopifyOrderUrl(shop, o.shopifyOrderId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: "13px", fontWeight: 600, color: "#2563eb", textDecoration: "none", display: "flex", alignItems: "center", gap: "4px" }}
+                onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+              >
+                {o.shopifyOrderName}
+                <span style={{ fontSize: "10px", color: "#94a3b8" }}>↗</span>
+              </a>
+              {/* Profit */}
+              <span style={{ fontSize: "13px", fontWeight: 700, color: o.netProfit < 0 ? tokens.loss : tokens.profit }}>
+                {fmtCurrency(o.netProfit, o.currency)}
+              </span>
+              {/* Margin */}
+              <DBadge variant={o.marginPercent < 0 ? "danger" : o.marginPercent < 10 ? "warning" : "success"} size="sm">
+                {o.cogsComplete ? `${o.marginPercent.toFixed(1)}%` : "?%"}
+              </DBadge>
+              {/* Top cost */}
+              <span style={{ fontSize: "12px", color: tokens.textMuted }}>{o.topCostReason}</span>
+              {/* Action */}
+              {o.isHeld ? (
+                <DBadge variant="warning" size="sm">On Hold</DBadge>
+              ) : (
+                <a
+                  href={getShopifyOrderUrl(shop, o.shopifyOrderId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: "12px", color: "#2563eb", textDecoration: "none", fontWeight: 500 }}
+                >
+                  Review ↗
+                </a>
+              )}
+            </div>
+          ))}
+
+          {/* Footer */}
+          <div style={{ padding: "10px 16px" }}>
+            <button
+              onClick={() => navigate("/app/orders?profitability=loss")}
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "13px", color: "#2563eb", fontWeight: 500, padding: 0,
+                textDecoration: "underline",
+              }}
+            >
+              View all loss orders →
+            </button>
+          </div>
+        </>
       )}
-      <Box padding="400" borderBlockStartWidth="025" borderColor="border">
-        <Button variant="plain" url="/app/orders?profitability=loss">View all loss orders →</Button>
-      </Box>
-    </Card>
+    </DCard>
   );
 }
 
@@ -1414,45 +1613,55 @@ function HeldOrdersCard({ heldOrders, heldSavedAmount, onRelease, isSubmitting }
   onRelease: (id: string) => void; isSubmitting: boolean;
 }) {
   return (
-    <Card padding="0">
-      <Box padding="400" borderBlockEndWidth="025" borderColor="border">
-        <InlineStack align="space-between" blockAlign="center">
-          <BlockStack gap="0">
-            <Text variant="headingMd" as="h2">Held Orders</Text>
+    <DCard>
+      <DCardHeader>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <p style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: tokens.text }}>Held Orders</p>
             {heldSavedAmount > 0
-              ? <Text variant="bodySm" as="p" tone="success">🛡 Saved ~{fmtCurrency(heldSavedAmount)} in potential losses</Text>
-              : <Text variant="bodySm" as="p" tone="subdued">Auto-hold active</Text>}
-          </BlockStack>
-          {heldOrders.length > 0 && <Badge tone="warning">{String(heldOrders.length)}</Badge>}
-        </InlineStack>
-      </Box>
+              ? <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.profit, fontWeight: 500 }}>🛡 Saved ~{fmtCurrency(heldSavedAmount)}</p>
+              : <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.textMuted }}>Auto-hold active</p>}
+          </div>
+          {heldOrders.length > 0 && <DBadge variant="warning">{String(heldOrders.length)}</DBadge>}
+        </div>
+      </DCardHeader>
       {heldOrders.length === 0 ? (
-        <Box padding="400"><Text as="p" tone="subdued">No orders on hold right now.</Text></Box>
+        <DCardBody>
+          <p style={{ margin: 0, fontSize: "13px", color: tokens.textMuted }}>No orders on hold right now.</p>
+        </DCardBody>
       ) : (
-        <ResourceList
-          resourceName={{ singular: "held order", plural: "held orders" }}
-          items={heldOrders}
-          renderItem={(order: HeldOrder) => (
-            <ResourceItem id={order.id} onClick={() => {}} accessibilityLabel={order.shopifyOrderName}>
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <Text variant="bodyMd" fontWeight="semibold" as="p">{order.shopifyOrderName}</Text>
-                  <Text variant="bodySm" as="p" tone="subdued">{order.heldReason ?? "Held for review"}</Text>
-                </BlockStack>
-                <InlineStack gap="300" blockAlign="center">
-                  <Badge tone={order.marginPercent < 0 ? "critical" : "warning"}>
-                    {order.marginPercent.toFixed(1) + "%"}
-                  </Badge>
-                  <Button variant="primary" size="slim" loading={isSubmitting} onClick={() => onRelease(order.id)}>
-                    Release
-                  </Button>
-                </InlineStack>
-              </InlineStack>
-            </ResourceItem>
-          )}
-        />
+        heldOrders.map((order) => (
+          <div key={order.id} style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "12px 20px", borderBottom: `1px solid ${tokens.border}`,
+          }}>
+            <div>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: 600, color: tokens.text }}>{order.shopifyOrderName}</p>
+              <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.textMuted }}>{order.heldReason ?? "Held for review"}</p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <DBadge variant={order.marginPercent < 0 ? "danger" : "warning"}>{order.marginPercent.toFixed(1)}%</DBadge>
+              <button
+                onClick={() => onRelease(order.id)}
+                disabled={isSubmitting}
+                style={{
+                  padding: "6px 14px", borderRadius: "8px",
+                  background: tokens.text, color: "#fff",
+                  border: "none", cursor: "pointer",
+                  fontSize: "12px", fontWeight: 600,
+                  opacity: isSubmitting ? 0.6 : 1,
+                  transition: "background 0.15s",
+                }}
+                onMouseEnter={(e) => { if (!isSubmitting) (e.currentTarget.style.background = "#1e293b"); }}
+                onMouseLeave={(e) => (e.currentTarget.style.background = tokens.text)}
+              >
+                Release
+              </button>
+            </div>
+          </div>
+        ))
       )}
-    </Card>
+    </DCard>
   );
 }
 
@@ -1471,7 +1680,6 @@ export default function Dashboard() {
   const isLoading = navigation.state === "loading";
   const isSubmitting = navigation.state === "submitting";
 
-  // Sync date range from localStorage on first load if no URL params set
   useEffect(() => {
     const hasDateParam = searchParams.has("from") || searchParams.has("to");
     if (!hasDateParam) {
@@ -1497,16 +1705,16 @@ export default function Dashboard() {
       <Page title="Dashboard">
         <Layout>
           <Layout.Section>
-            <Card>
+            <DCard>
               <EmptyState
                 heading="ClearProfit is ready to go"
                 image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                 action={{ content: "Set up product costs", url: "/app/products" }}
                 secondaryAction={{ content: "Configure settings", url: "/app/settings" }}
               >
-                <p>Your first order will be calculated the moment it comes in. Set up product costs so margins are accurate from day one.</p>
+                <p>Your first order will be calculated the moment it comes in.</p>
               </EmptyState>
-            </Card>
+            </DCard>
           </Layout.Section>
         </Layout>
       </Page>
@@ -1529,6 +1737,8 @@ export default function Dashboard() {
     setSearchParams(next);
   };
 
+  const gap = "16px";
+
   return (
     <Page
       title="Dashboard"
@@ -1537,59 +1747,52 @@ export default function Dashboard() {
         onAction: () => { setDraftCards([...visibleCards]); setCustomizeOpen(true); },
       }}
     >
-      <Layout>
-        {/* Date range picker — always visible */}
-        <Layout.Section>
-          <DateRangePicker dateFrom={dateFrom} dateTo={dateTo} onUpdate={handleDateUpdate} />
-        </Layout.Section>
+      <div style={{ display: "flex", flexDirection: "column", gap }}>
+        {/* Date picker */}
+        <DateRangePicker dateFrom={dateFrom} dateTo={dateTo} onUpdate={handleDateUpdate} />
 
+        {/* Action Center — ABOVE KPIs */}
         {isVisible("action_center") && (
-          <Layout.Section>
-            <ActionCenter actionCenter={actionCenter} missingCogsCount={missingCogsCount} />
-          </Layout.Section>
+          <ActionCenter actionCenter={actionCenter} missingCogsCount={missingCogsCount} />
         )}
 
+        {/* KPI Strip */}
         {isVisible("kpi_strip") && (
-          <Layout.Section>
-            <KpiStrip metrics={kpiMetrics} extended={extendedKpis} />
-          </Layout.Section>
+          <KpiStrip metrics={kpiMetrics} extended={extendedKpis} />
         )}
 
+        {/* Revenue Allocation */}
         {isVisible("revenue_allocation") && (
-          <Layout.Section>
-            <RevenueAllocationBar allocation={revenueAllocation} />
-          </Layout.Section>
+          <RevenueAllocationBar allocation={revenueAllocation} />
         )}
 
+        {/* Product Leaderboard */}
         {isVisible("product_leaderboard") && (
-          <Layout.Section>
-            <ProductLeaderboard top={productLeaderboard.top} leaks={productLeaderboard.leaks} />
-          </Layout.Section>
+          <ProductLeaderboard top={productLeaderboard.top} leaks={productLeaderboard.leaks} />
         )}
 
+        {/* Chart */}
         {isVisible("chart") && (
-          <Layout.Section>
-            <ProfitChart chartData={chartData} />
-          </Layout.Section>
+          <ProfitChart chartData={chartData} />
         )}
 
+        {/* Priority Orders + Held Orders side by side */}
         {(isVisible("priority_orders") || isVisible("held_orders")) && (
-          <Layout.Section>
-            <InlineGrid columns={{ xs: 1, lg: 2 }} gap="400">
-              {isVisible("priority_orders") && <PriorityOrders orders={priorityOrders} shop={shop} />}
-              {isVisible("held_orders") && (
-                <HeldOrdersCard
-                  heldOrders={heldOrders}
-                  heldSavedAmount={heldSavedAmount}
-                  onRelease={(id) => submit({ intent: "releaseHold", orderId: id }, { method: "POST" })}
-                  isSubmitting={isSubmitting}
-                />
-              )}
-            </InlineGrid>
-          </Layout.Section>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap }}>
+            {isVisible("priority_orders") && <PriorityOrders orders={priorityOrders} shop={shop} />}
+            {isVisible("held_orders") && (
+              <HeldOrdersCard
+                heldOrders={heldOrders}
+                heldSavedAmount={heldSavedAmount}
+                onRelease={(id) => submit({ intent: "releaseHold", orderId: id }, { method: "POST" })}
+                isSubmitting={isSubmitting}
+              />
+            )}
+          </div>
         )}
-      </Layout>
+      </div>
 
+      {/* Customize modal — kept in Polaris */}
       <Modal
         open={customizeOpen}
         onClose={() => setCustomizeOpen(false)}
