@@ -56,9 +56,6 @@ export default function App() {
           <s-link href="/app/products">Products</s-link>
           <s-link href="/app/expenses">Expenses</s-link>
           <s-link href="/app/settings">Settings</s-link>
-          <s-link href="/app/shipping">Shipping Cost</s-link>
-          <s-link href="/app/cogs">Cogs cost</s-link>
-          <s-link href="/app/payment">Payment</s-link>
           <s-link href="/app/ads">Ads</s-link>
         </s-app-nav>
         <Outlet />
