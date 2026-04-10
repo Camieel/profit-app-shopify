@@ -212,7 +212,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "completeToCogs") {
     await db.shopSettings.update({ where: { shop }, data: { onboardingComplete: true } });
-    return redirect("/app/cogs");
+    return redirect("/app/configuration");
   }
 
   return { ok: true };
@@ -267,7 +267,7 @@ function StepIndicator({ step }: { step: number }) {
         <div style={{ height: "6px", borderRadius: "3px", background: "#e5e7eb", overflow: "hidden" }}>
           <div style={{
             height: "100%", width: `${progress}%`,
-            background: "#008060", borderRadius: "3px", transition: "width 0.3s ease",
+            background: "#0f172a", borderRadius: "3px", transition: "width 0.3s ease",
           }} />
         </div>
       </BlockStack>
@@ -503,7 +503,7 @@ export default function Onboarding() {
               <Banner tone="warning">
                 <Text as="p" variant="bodySm">
                   No products synced yet — this happens automatically in the background.
-                  You can set cost prices later via <strong>COGS Configuration</strong> in the app.
+                  You can set cost prices later via <strong>Configuration → COGS Configuration</strong> in the app.
                 </Text>
               </Banner>
             ) : allGood ? (
@@ -547,7 +547,7 @@ export default function Onboarding() {
                     <Text as="p" variant="bodySm" fontWeight="semibold">How to fix this after completing setup:</Text>
                     <BlockStack gap="100">
                       <Text as="p" variant="bodySm" tone="subdued">
-                        {"→ Open COGS Configuration in the app sidebar. Enter costs per variant or bulk import via CSV."}
+                        {"→ Open Configuration → COGS Configuration from the sidebar. Enter costs per variant or bulk import via CSV."}
                       </Text>
                       <Text as="p" variant="bodySm" tone="subdued">
                         {"→ Or set cost prices in Shopify: Products → select variant → Cost per item. ClearProfit syncs automatically."}
@@ -557,7 +557,7 @@ export default function Onboarding() {
                 </div>
 
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Continue now — fix cost prices in <strong>COGS Configuration</strong> after setup. Profit figures won't be fully accurate until then.
+                  Continue now and fix cost prices in <strong>Configuration → COGS Configuration</strong> after setup. The Action Center will remind you which products are still missing costs.
                 </Text>
               </>
             )}
@@ -885,7 +885,7 @@ export default function Onboarding() {
                   {`${unprofitableOrderCount} unprofitable orders are waiting for your review`}
                 </Text>
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Go to the dashboard and click "View loss orders" to see them.
+                  Open the dashboard — the Action Center will show exactly which orders need attention.
                 </Text>
               </BlockStack>
             </div>
@@ -893,7 +893,7 @@ export default function Onboarding() {
 
           <Banner tone="info">
             <Text as="p" variant="bodySm">
-              <strong>Tip:</strong> You can connect or manage ad accounts later via <strong>Settings</strong>.
+              <strong>Tip:</strong> Manage ad accounts and margin thresholds via <strong>Settings</strong>. Set up cost prices via <strong>Configuration</strong>. The <strong>Action Center</strong> will highlight any issues automatically.
             </Text>
           </Banner>
 
