@@ -1,7 +1,7 @@
 // app/routes/app.ads.tsx
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigation, useSearchParams } from "react-router";
+import { useLoaderData, useNavigation, useSearchParams, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { Page, Banner, EmptyState, Text, InlineStack } from "@shopify/polaris";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
@@ -151,6 +151,7 @@ export default function AdsPage() {
   }, []);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  const navigate = useNavigate();
   const updateDateRange = (from: string, to: string) => { const next = new URLSearchParams(searchParams); next.set("from", from); next.set("to", to); setSearchParams(next); };
   const xInterval = Math.max(1, Math.floor(daily.length / 8));
   const CAMP_COL = "1fr 130px 100px 100px 80px 90px 90px 80px";
@@ -163,7 +164,7 @@ export default function AdsPage() {
           <div style={{ padding: "48px 20px", textAlign: "center" }}>
             <p style={{ margin: "0 0 8px", fontSize: "16px", fontWeight: 700, color: tokens.text }}>No ad accounts connected</p>
             <p style={{ margin: "0 0 20px", fontSize: "13px", color: tokens.textMuted }}>Connect Meta Ads, Google Ads, or TikTok Ads in Settings to start tracking POAS.</p>
-            <a href="/app/settings" style={{ padding: "8px 20px", borderRadius: "8px", background: tokens.text, color: "#fff", textDecoration: "none", fontSize: "13px", fontWeight: 600 }}>Connect ad accounts →</a>
+            <button onClick={() => navigate("/app/settings")} style={{ padding: "8px 20px", borderRadius: "8px", background: tokens.text, color: "#fff", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: 600 }}>Connect ad accounts →</button>
           </div>
         </DCard>
       </Page>
@@ -188,7 +189,7 @@ export default function AdsPage() {
             <div style={{ padding: "48px 20px", textAlign: "center" }}>
               <p style={{ margin: "0 0 8px", fontSize: "15px", fontWeight: 600, color: tokens.text }}>No ad spend data in this period</p>
               <p style={{ margin: "0 0 16px", fontSize: "13px", color: tokens.textMuted }}>Trigger a manual sync in Settings or wait for the automatic daily sync.</p>
-              <a href="/app/settings" style={{ fontSize: "13px", color: "#2563eb", fontWeight: 500 }}>Sync ad data now →</a>
+              <button onClick={() => navigate("/app/settings")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: "#2563eb", fontWeight: 500, textDecoration: "underline" }}>Sync ad data now →</button>
             </div>
           </DCard>
         ) : (
@@ -294,7 +295,7 @@ export default function AdsPage() {
                   <p style={{ margin: "0 0 2px", fontSize: "15px", fontWeight: 700, color: tokens.text }}>Campaign breakdown</p>
                   <p style={{ margin: 0, fontSize: "12px", color: tokens.textMuted }}>{hasCampaignData ? "Sorted by spend — POAS = net profit ÷ ad spend" : "Trigger a sync to load campaign-level data"}</p>
                 </div>
-                {!hasCampaignData && <a href="/app/settings" style={{ fontSize: "13px", color: "#2563eb", fontWeight: 500 }}>Sync now →</a>}
+                {!hasCampaignData && <button onClick={() => navigate("/app/settings")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: "#2563eb", fontWeight: 500, textDecoration: "underline" }}>Sync now →</button>}
               </div>
 
               {hasCampaignData && campaigns.length > 0 ? (
