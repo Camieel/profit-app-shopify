@@ -1,7 +1,7 @@
 import React from "react";
 // app/routes/app.tsx
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Link, Outlet, redirect, useLoaderData, useRouteError } from "react-router";
+import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -55,14 +55,14 @@ export default function App() {
     <ShopifyAppProvider embedded apiKey={apiKey}>
       <PolarisAppProvider i18n={enTranslations}>
         <ui-nav-menu>
-          <Link to="/app" rel="home">Dashboard</Link>
-          <Link to="/app/actions">{actionCenterLabel}</Link>
-          <Link to="/app/orders">Orders</Link>
-          <Link to="/app/products">Products</Link>
-          <Link to="/app/expenses">Expenses</Link>
-          <Link to="/app/ads">Ads</Link>
-          <Link to="/app/configuration">Configuration</Link>
-          <Link to="/app/settings">Settings</Link>
+          <a href="/app">Dashboard</a>
+          <a href="/app/actions">{actionCenterLabel}</a>
+          <a href="/app/orders">Orders</a>
+          <a href="/app/products">Products</a>
+          <a href="/app/expenses">Expenses</a>
+          <a href="/app/ads">Ads</a>
+          <a href="/app/configuration">Configuration</a>
+          <a href="/app/settings">Settings</a>
         </ui-nav-menu>
         <Outlet />
       </PolarisAppProvider>
