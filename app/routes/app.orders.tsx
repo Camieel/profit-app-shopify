@@ -257,90 +257,39 @@ function LossHeadline({ summary, worstOrders }: { summary: Summary; worstOrders:
   );
 }
 
-// ── Action Center (orders page — contextual, links to hub) ─────────────────────
-function ActionCenter({ summary, currentSearch, navigate }: {
-  summary: Summary; currentSearch: string; navigate: (url: string) => void;
+// ── Compact Issue Strip (replaces full Action Center widget on Orders page) ────
+// Design decision: Orders page focuses on order data. Issues are resolved in
+// Action Center hub. This strip surfaces issues contextually with ONE link.
+function IssueStrip({ summary, navigate }: {
+  summary: Summary;
+  navigate: (url: string) => void;
 }) {
-  const buildUrl = (key: string, value: string) => {
-    const params = new URLSearchParams(currentSearch);
-    params.delete("status"); params.delete("profitability"); params.delete("cogs"); params.delete("reason");
-    params.set(key, value); params.set("page", "1");
-    return `/app/orders?${params.toString()}`;
-  };
+  const parts: string[] = [];
+  if (summary.lossSummary.count > 0) parts.push(`${summary.lossSummary.count} loss order${summary.lossSummary.count > 1 ? "s" : ""} (${fmt(Math.abs(summary.lossSummary.totalLoss))})`);
+  if (summary.heldCount > 0) parts.push(`${summary.heldCount} on hold`);
+  if (summary.missingCogsCount > 0) parts.push(`${summary.missingCogsCount} missing COGS`);
 
-  const actions: ActionEntry[] = [];
-  if (summary.lossSummary.count > 0) {
-    const impact = Math.abs(summary.lossSummary.totalLoss);
-    actions.push({ id: "loss", group: "leakage", message: `${summary.lossSummary.count} orders losing ${fmt(impact)} — fix pricing or costs`, tone: "critical", buttonLabel: "View loss orders", filterKey: "profitability", filterValue: "loss", priorityScore: Math.pow(impact, 1.2) * 0.6 + summary.lossSummary.count * 30 * 0.3 + 100 * 0.1, recoverable: impact * 0.6 });
-  }
-  if (summary.refundedCount > 0) actions.push({ id: "refunds", group: "leakage", message: `${summary.refundedCount} refunded orders — investigate why`, tone: "critical", buttonLabel: "Review refunds", filterKey: "status", filterValue: "refunded", priorityScore: summary.refundedCount * 50, recoverable: null });
-  if (summary.missingCogsCount > 0) actions.push({ id: "cogs", group: "data", message: `${summary.missingCogsCount} orders missing COGS — margins are inaccurate`, tone: "caution", buttonLabel: "Fix product costs", filterKey: "cogs", filterValue: "missing", priorityScore: summary.missingCogsCount * 20, recoverable: null });
-  if (summary.heldCount > 0) actions.push({ id: "held", group: "operations", message: `${summary.heldCount} orders on hold — cashflow blocked`, tone: "caution", buttonLabel: "Unblock cashflow", filterKey: "status", filterValue: "held", priorityScore: summary.heldCount * 40, recoverable: null });
-
-  if (actions.length === 0) {
-    return (
-      <DCard>
-        <div style={{ padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "16px" }}>✅</span>
-            <p style={{ margin: 0, fontSize: "14px", fontWeight: 600, color: tokens.profit }}>All good — no issues in this period</p>
-          </div>
-          <button onClick={() => navigate("/app/actions")}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: "#2563eb", fontWeight: 500, padding: 0 }}
-            onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-            onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-          >View Action Center →</button>
-        </div>
-      </DCard>
-    );
-  }
-
-  const toneWeight = { critical: 1.3, caution: 1.1, info: 1.0 };
-  actions.sort((a, b) => b.priorityScore * toneWeight[b.tone] - a.priorityScore * toneWeight[a.tone]);
-  const allActions = actions.slice(0, 4);
+  if (parts.length === 0) return (
+    <div style={{ padding: "10px 16px", borderRadius: "8px", background: tokens.profitBg, border: `1px solid ${tokens.profitBorder}`, display: "flex", alignItems: "center", gap: "8px" }}>
+      <span style={{ fontSize: "13px", color: tokens.profit, fontWeight: 500 }}>✅ No issues in this period</span>
+    </div>
+  );
 
   return (
-    <DCard>
-      <div style={{ padding: "12px 20px", borderBottom: `1px solid ${tokens.border}`, background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <p style={{ margin: 0, fontSize: "13px", fontWeight: 700, color: tokens.text }}>
-          {allActions.filter((a) => a.tone === "critical").length > 0 ? "🔴" : "⚠️"} {allActions.length} issue{allActions.length !== 1 ? "s" : ""} in this period
-        </p>
-        <button onClick={() => navigate("/app/actions")}
-          style={{ background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: "#2563eb", fontWeight: 600, padding: 0 }}
-          onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-          onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-        >All issues →</button>
-      </div>
-      {allActions.map((a, i) => {
-        const isTop = i === 0;
-        const borderLeft = a.tone === "critical" ? `3px solid ${tokens.loss}` : `3px solid ${tokens.warning}`;
-        const bg = a.tone === "critical" ? tokens.lossBg : tokens.warningBg;
-        return (
-          <div key={a.id} style={{ padding: "12px 20px", background: isTop ? bg : tokens.cardBg, borderBottom: i < allActions.length - 1 ? `1px solid ${tokens.border}` : undefined, borderLeft, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
-            <p style={{ margin: 0, fontSize: isTop ? "14px" : "13px", fontWeight: isTop ? 600 : 400, color: a.tone === "critical" ? tokens.loss : tokens.warning }}>
-              {a.message}
-              {a.recoverable != null && a.recoverable > 0 && (
-                <span style={{ color: tokens.profit, fontWeight: 500 }}> — ~{fmt(a.recoverable)} recoverable</span>
-              )}
-            </p>
-            <button onClick={() => navigate(buildUrl(a.filterKey, a.filterValue))}
-              style={{ padding: "5px 14px", borderRadius: "8px", flexShrink: 0, background: isTop ? tokens.text : "transparent", color: isTop ? "#fff" : tokens.textMuted, border: isTop ? "none" : `1px solid ${tokens.border}`, cursor: "pointer", fontSize: "12px", fontWeight: 600, transition: "all 0.15s" }}
-            >{a.buttonLabel}</button>
-          </div>
-        );
-      })}
-      {/* Footer: link to hub */}
-      <div style={{ padding: "10px 20px", borderTop: `1px solid ${tokens.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: "12px", color: tokens.textMuted }}>Showing issues for this date range</span>
-        <button onClick={() => navigate("/app/actions")}
-          style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: "#2563eb", fontWeight: 600, padding: 0 }}
-          onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-          onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-        >View all in Action Center →</button>
-      </div>
-    </DCard>
+    <div style={{ padding: "10px 16px", borderRadius: "8px", background: tokens.lossBg, border: `1px solid ${tokens.lossBorder}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+      <span style={{ fontSize: "13px", color: tokens.loss, fontWeight: 500 }}>
+        🔴 {parts.join(" · ")} in this period
+      </span>
+      <button
+        onClick={() => navigate("/app/actions")}
+        style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.loss, fontWeight: 700, padding: 0, flexShrink: 0 }}
+      >
+        View in Action Center →
+      </button>
+    </div>
   );
 }
+
 
 // ── Orders table ──────────────────────────────────────────────────────────────
 const COL_WIDTHS = "130px 90px 90px 80px 90px 70px 80px 80px 90px 70px 90px 80px";
@@ -362,8 +311,10 @@ function OrdersTable({ orders, shop, page, totalPages, totalCount, missingCogsCo
           style={{ padding: "4px 12px", borderRadius: "6px", background: sortMode === "loss" ? tokens.text : "transparent", color: sortMode === "loss" ? "#fff" : tokens.textMuted, border: `1px solid ${sortMode === "loss" ? tokens.text : tokens.border}`, cursor: "pointer", fontSize: "12px", fontWeight: 600 }}
         >{sortMode === "loss" ? "Reset order" : "Show worst first"}</button>
       </div>
+      {/* Scrollable table area */}
+      <div style={{ overflowX: "auto" }}>
       {/* Column headers */}
-      <div style={{ display: "grid", gridTemplateColumns: COL_WIDTHS, padding: "8px 16px", borderBottom: `1px solid ${tokens.border}`, background: "#f8fafc" }}>
+      <div style={{ display: "grid", gridTemplateColumns: COL_WIDTHS, padding: "8px 16px", borderBottom: `1px solid ${tokens.border}`, background: "#f8fafc", minWidth: "900px" }}>
         {HEADINGS.map((h) => <span key={h} style={{ fontSize: "11px", fontWeight: 700, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</span>)}
       </div>
       {/* Rows */}
@@ -412,6 +363,7 @@ function OrdersTable({ orders, shop, page, totalPages, totalCount, missingCogsCo
           );
         })}
       </div>
+      </div>{/* end scrollable table */}
       {/* Footer */}
       <div style={{ padding: "12px 16px", borderTop: `1px solid ${tokens.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
@@ -454,9 +406,15 @@ export default function OrdersPage() {
 
   const updateParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams);
-    next.set(key, value);
+    if (value === "all") next.delete(key); else next.set(key, value);
     if (key !== "page") next.set("page", "1");
     setSearchParams(next);
+    // Scroll to table so user sees filtered results immediately
+    if (key !== "page") {
+      setTimeout(() => {
+        document.getElementById("orders-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
+    }
   };
   const updateDateRange = (from: string, to: string) => {
     const next = new URLSearchParams(searchParams);
@@ -483,10 +441,15 @@ export default function OrdersPage() {
               <Select label="COGS" options={[{ label: "All", value: "all" }, { label: "Missing only", value: "missing" }]} value={cogsFilter} onChange={(v) => updateParam("cogs", v)} disabled={isNavigating} />
               <Select label="Top cost" options={[{ label: "All reasons", value: "all" }, { label: "📢 Ads", value: "ads" }, { label: "📦 COGS", value: "cogs" }, { label: "🚚 Shipping", value: "shipping" }, { label: "💳 Fees", value: "fees" }]} value={reason} onChange={(v) => updateParam("reason", v)} disabled={isNavigating} />
             </div>
-            {reason !== "all" && (
-              <div style={{ marginTop: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{ fontSize: "13px", fontWeight: 600, color: tokens.warning }}>Showing: orders where {reasonLabels[reason] ?? reason} is top cost</span>
-                <button onClick={() => updateParam("reason", "all")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: tokens.textMuted, textDecoration: "underline" }}>Clear</button>
+            {/* Active filters row */}
+            {(status !== "all" || profitability !== "all" || cogsFilter !== "all" || reason !== "all") && (
+              <div style={{ marginTop: "10px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                <span style={{ fontSize: "12px", color: tokens.textMuted, marginRight: "2px" }}>Active:</span>
+                {status !== "all" && <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 10px", borderRadius: "100px", background: "#f1f5f9", border: `1px solid ${tokens.border}`, fontSize: "12px", fontWeight: 600 }}>Status: {status} <button onClick={() => updateParam("status", "all")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.textMuted, padding: "0 0 0 2px", lineHeight: 1 }}>×</button></span>}
+                {profitability !== "all" && <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 10px", borderRadius: "100px", background: "#f1f5f9", border: `1px solid ${tokens.border}`, fontSize: "12px", fontWeight: 600 }}>Profitability: {profitability} <button onClick={() => updateParam("profitability", "all")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.textMuted, padding: "0 0 0 2px", lineHeight: 1 }}>×</button></span>}
+                {cogsFilter !== "all" && <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 10px", borderRadius: "100px", background: "#f1f5f9", border: `1px solid ${tokens.border}`, fontSize: "12px", fontWeight: 600 }}>COGS: {cogsFilter} <button onClick={() => updateParam("cogs", "all")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.textMuted, padding: "0 0 0 2px", lineHeight: 1 }}>×</button></span>}
+                {reason !== "all" && <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 10px", borderRadius: "100px", background: "#fffbeb", border: `1px solid #fde68a`, fontSize: "12px", fontWeight: 600, color: tokens.warning }}>{reasonLabels[reason] ?? reason} is top cost <button onClick={() => updateParam("reason", "all")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.warning, padding: "0 0 0 2px", lineHeight: 1 }}>×</button></span>}
+                <button onClick={() => { updateParam("status", "all"); updateParam("profitability", "all"); updateParam("cogs", "all"); updateParam("reason", "all"); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: tokens.textMuted, textDecoration: "underline", marginLeft: "4px" }}>Clear all</button>
               </div>
             )}
             {isNavigating && <p style={{ margin: "8px 0 0", fontSize: "12px", color: tokens.textMuted }}>Updating…</p>}
@@ -497,12 +460,13 @@ export default function OrdersPage() {
         <LossHeadline summary={summary} worstOrders={worstOrders} />
 
         {/* Action Center — contextual to this date range, with hub link */}
-        <ActionCenter summary={summary} currentSearch={location.search} navigate={navigate} />
+        <IssueStrip summary={summary} navigate={navigate} />
 
         {/* Summary strip */}
         <SummaryStrip summary={summary} onFilter={updateParam} />
 
         {/* Orders table */}
+        <div id="orders-table" />
         {isNavigating ? (
           <DCard>
             <div style={{ padding: "20px" }}>
