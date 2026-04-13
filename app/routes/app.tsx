@@ -1,3 +1,4 @@
+import React from "react";
 // app/routes/app.tsx
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Link, Outlet, redirect, useLoaderData, useRouteError } from "react-router";
@@ -7,6 +8,16 @@ import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+
+// Shopify App Bridge web components
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      "ui-nav-menu": React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement>;
+    }
+  }
+}
+
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
