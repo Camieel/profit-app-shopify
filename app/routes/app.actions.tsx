@@ -177,10 +177,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       type = typeMap[topProduct.topCostSource] ?? "loss_due_to_ads";
       recovery = topProduct.totalLoss;
       description = `${lossOrders7d.length} order${lossOrders7d.length > 1 ? "s" : ""} unprofitable${unheld > 0 ? `, ${unheld} shipped without hold` : ""}. ${sourceAdvice[topProduct.topCostSource] ?? ""}`;
-      if (topProduct.topCostSource === "cogs") itemActions = [{ label: "Update cost price", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: filterUrls["cogs"] }];
+      if (topProduct.topCostSource === "cogs") itemActions = [{ label: "Update cost price", url: `/app/cogs?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: filterUrls["cogs"] }];
       else if (topProduct.topCostSource === "ads") itemActions = [{ label: "Review ad spend", url: "/app/ads", primary: true }, { label: "View affected orders", url: filterUrls["ads"] }];
       else if (topProduct.topCostSource === "shipping") itemActions = [{ label: "Check shipping rules", url: "/app/shipping", primary: true }, { label: "View orders", url: filterUrls["shipping"] }];
-      else itemActions = [{ label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: "/app/orders?profitability=loss" }];
+      else itemActions = [{ label: "Fix cost price", url: `/app/cogs?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: "/app/orders?profitability=loss" }];
     } else if (isDominant) {
       title = `${sourceLabels[topSource]} causing ${topSourcePercent}% of your losses`;
       type = typeMap[topSource] ?? "loss_due_to_ads";
@@ -202,7 +202,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     items.push({
       type: "loss_mixed", severity: "critical", score: heldOrders.length * 80,
       title: `${heldOrders.length} order${heldOrders.length > 1 ? "s" : ""} on hold — cashflow blocked`,
-      description: `${heldOrders.length} order${heldOrders.length > 1 ? "s" : ""} are currently held from fulfillment. Each hour of delay risks customer dissatisfaction. Review and release or cancel them.`,
+      description: `${heldOrders.length} order${heldOrders.length > 1 ? "s are" : " is"} currently held from fulfillment. Each hour of delay risks customer dissatisfaction. Review and release or cancel them.`,
       potentialRecovery: null, weeklyLoss: null, timeToFix: "2 min",
       actions: [{ label: "Review held orders", url: "/app/orders?status=held", primary: true }],
       detectedAt: now7d,
@@ -218,7 +218,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       title: `Average margin is ${gap.toFixed(1)}% below your target`,
       description: `Your average margin this week is ${avgMargin7d.toFixed(1)}%, against your target of ${alertMarginThreshold}%+. Every order is underperforming. Review product pricing and COGS accuracy.`,
       potentialRecovery: null, weeklyLoss: null, timeToFix: "10 min",
-      actions: [{ label: "View products", url: "/app/products", primary: true }, { label: "Check settings", url: "/app/settings" }],
+      actions: [{ label: "Fix missing COGS", url: "/app/cogs", primary: true }, { label: "Check settings", url: "/app/settings" }],
       detectedAt: now7d,
     });
   }
@@ -245,7 +245,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       title: `${missingCogsVariants.length} product variant${missingCogsVariants.length > 1 ? "s" : ""} missing cost data`,
       description: `Orders with missing COGS show inflated margins and won't trigger auto-holds correctly. Your profit figures may be overstated by ~$${impact}/mo.`,
       potentialRecovery: null, weeklyLoss: null, timeToFix: "2 min",
-      actions: [{ label: "Fix missing COGS", url: "/app/configuration", primary: true }],
+      actions: [{ label: "Fix missing COGS", url: "/app/cogs", primary: true }],
       detectedAt: now7d,
     });
   }
