@@ -236,16 +236,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       title = topProduct.topCostSourcePercent >= 50 ? `"${topProduct.title}" is losing money mainly due to ${costSourceNames[topProduct.topCostSource]} (${topProduct.topCostSourcePercent}%)` : `"${topProduct.title}" caused ${topProduct.percentOfTotalLoss}% of your losses this week`;
       itemSeverity = topProduct.percentOfTotalLoss > 60 ? "critical" : "warning"; itemTimeToFix = "2 min";
       actionType = typeMap[topProduct.topCostSource] ?? "loss_due_to_ads";
-      if (topProduct.topCostSource === "cogs") itemActions.push({ label: "Update cost price", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: filterUrls["cogs"] });
-      else if (topProduct.topCostSource === "ads") itemActions.push({ label: "Review ad spend", url: filterUrls["ads"], primary: true }, { label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}` });
-      else if (topProduct.topCostSource === "shipping") itemActions.push({ label: "View shipping orders", url: filterUrls["shipping"], primary: true }, { label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}` });
-      else itemActions.push({ label: "View product", url: `/app/products?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: filterUrls[topProduct.topCostSource] ?? "/app/orders?profitability=loss" });
+      if (topProduct.topCostSource === "cogs") itemActions.push({ label: "Update cost price", url: `/app/cogs?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: filterUrls["cogs"] });
+      else if (topProduct.topCostSource === "ads") itemActions.push({ label: "Review ad spend", url: filterUrls["ads"], primary: true }, { label: "Fix cost price", url: `/app/cogs?search=${encodeURIComponent(topProduct.title)}` });
+      else if (topProduct.topCostSource === "shipping") itemActions.push({ label: "View shipping orders", url: filterUrls["shipping"], primary: true }, { label: "Fix cost price", url: `/app/cogs?search=${encodeURIComponent(topProduct.title)}` });
+      else itemActions.push({ label: "Fix cost price", url: `/app/cogs?search=${encodeURIComponent(topProduct.title)}`, primary: true }, { label: "View loss orders", url: filterUrls[topProduct.topCostSource] ?? "/app/orders?profitability=loss" });
     } else if (isDominant) {
       title = `${sourceLabels[topSource]} caused ${topSourcePercent}% of your losses this week`; actionType = typeMap[topSource] ?? "loss_due_to_ads";
       itemActions.push({ label: "View affected orders", url: filterUrls[topSource], primary: true }, ...(!settings?.holdEnabled ? [{ label: "Enable auto-hold", url: "/app/settings" }] : []));
     } else {
       title = "Losses spread across multiple cost factors"; actionType = "loss_mixed";
-      itemActions.push({ label: "View loss orders", url: "/app/orders?profitability=loss", primary: true }, { label: "Review products", url: "/app/products" });
+      itemActions.push({ label: "View loss orders", url: "/app/orders?profitability=loss", primary: true }, { label: "Review cost prices", url: "/app/cogs" });
     }
     const cogsAdvice = topProduct?.topCostSource === "cogs" ? ` Update the cost price in ClearProfit or raise the selling price in Shopify to break even.` : "";
     const description = `${lossOrders7d.length} order${lossOrders7d.length > 1 ? "s" : ""} unprofitable${unheld > 0 ? ` · ${unheld} shipped without being held` : ""}. ${isDominant ? sourceAdvice[topSource] : "Review your pricing, COGS, and ad spend together."}${cogsAdvice}`;
@@ -254,7 +254,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
   if (avgMargin7d > 0 && avgMargin7d < alertMarginThreshold && lossOrders7d.length === 0) {
     const gap = alertMarginThreshold - avgMargin7d; const score = Math.pow(gap * 20, 1.1) * 0.6 + orders7d.length * 5 * 0.3 + 50 * 0.1;
-    actionItems.push({ type: "low_margin", severity: "warning", confidence: orders7d.length >= 5 ? "high" : "medium", score, title: `Margins are ${gap.toFixed(1)}% below target`, description: `Avg margin this week: ${avgMargin7d.toFixed(1)}% — target is ${alertMarginThreshold}%+. Check product pricing or COGS.`, impact: `${gap.toFixed(1)}% gap — every order underperforms`, potentialRecovery: null, timeToFix: "10 min", filterUrl: "/app/orders", actions: [{ label: "View products", url: "/app/products", primary: true }, { label: "Check settings", url: "/app/settings" }] });
+    actionItems.push({ type: "low_margin", severity: "warning", confidence: orders7d.length >= 5 ? "high" : "medium", score, title: `Margins are ${gap.toFixed(1)}% below target`, description: `Avg margin this week: ${avgMargin7d.toFixed(1)}% — target is ${alertMarginThreshold}%+. Check product pricing or COGS.`, impact: `${gap.toFixed(1)}% gap — every order underperforms`, potentialRecovery: null, timeToFix: "10 min", filterUrl: "/app/orders", actions: [{ label: "Fix cost prices", url: "/app/cogs", primary: true }, { label: "Check settings", url: "/app/settings" }] });
   }
   if (totalAdSpend > 0 && totalRevenue > 0 && totalAdSpend / totalRevenue > 0.4) {
     const excessSpend = totalAdSpend - totalRevenue * 0.3; const score = Math.pow(excessSpend, 1.1) * 0.6 + ordersInRange.length * 2 * 0.3 + 30 * 0.1;
@@ -266,7 +266,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
   if (missingCogsVariants.length > 0) {
     const cogsImpactCalc = ordersInRange.filter((o) => !o.cogsComplete).length * (totalRevenue / Math.max(ordersInRange.length, 1)) * 0.15;
-    actionItems.push({ type: "loss_mixed" as LossReason, severity: "info", confidence: "low", score: missingCogsVariants.length * 10, title: `Data health: ${missingCogsVariants.length} products missing cost data`, description: `Orders with missing COGS show inflated margins and may not trigger holds correctly.`, impact: `Profit may be overstated by ~${fmtK(cogsImpactCalc)}`, potentialRecovery: null, timeToFix: "2 min", filterUrl: "/app/configuration", actions: [{ label: "Fix now", url: "/app/configuration", primary: true }] });
+    actionItems.push({ type: "loss_mixed" as LossReason, severity: "info", confidence: "low", score: missingCogsVariants.length * 10, title: `Data health: ${missingCogsVariants.length} products missing cost data`, description: `Orders with missing COGS show inflated margins and may not trigger holds correctly.`, impact: `Profit may be overstated by ~${fmtK(cogsImpactCalc)}`, potentialRecovery: null, timeToFix: "2 min", filterUrl: "/app/cogs", actions: [{ label: "Fix now", url: "/app/cogs", primary: true }] });
   }
   const prioritizedItems = actionItems.sort((a, b) => b.score - a.score).slice(0, 3);
   let acState: "critical"|"warning"|"healthy" = "healthy";
@@ -351,7 +351,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 // ── Dismiss hook ──────────────────────────────────────────────────────────────
-const DISMISS_KEY = "cp_dismissed_actions_v2";
+const DISMISS_KEY = "cp_dismissed_actions";
 const DISMISS_TTL = 24 * 60 * 60 * 1000;
 function useDismissed() {
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -713,7 +713,7 @@ function ProfitChart({ chartData }: { chartData: ChartPoint[] }) {
 // ── Priority Orders ───────────────────────────────────────────────────────────
 function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: string }) {
   const navigate = useNavigate();
-  const needsAttention = orders.filter((o) => o.netProfit < 0 || o.marginPercent < 10);
+  const needsAttention = orders.filter((o) => o.netProfit < 0 || o.marginPercent < 10 || o.isHeld || o.cogsComplete === false);
   return (
     <DCard>
       <DCardHeader>
@@ -729,7 +729,7 @@ function PriorityOrders({ orders, shop }: { orders: PriorityOrder[]; shop: strin
           <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 70px 80px 80px", padding: "8px 16px", background: "#f8fafc", borderBottom: `1px solid ${tokens.border}` }}>
             {["Order", "Net Profit", "Margin", "Top Cost", "Action"].map((h) => (<span key={h} style={{ fontSize: "11px", fontWeight: 700, color: tokens.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</span>))}
           </div>
-          {orders.map((o) => (
+          {needsAttention.map((o) => (
             <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1fr 90px 70px 80px 80px", padding: "10px 16px", borderBottom: `1px solid ${tokens.border}`, background: o.netProfit < 0 ? "#fef2f2" : o.cogsComplete === false ? "#fffbeb" : "#ffffff", transition: "background 0.1s", alignItems: "center" }}
               onMouseEnter={(e) => { if (o.netProfit >= 0 && o.cogsComplete !== false) (e.currentTarget as HTMLDivElement).style.background = "#f8fafc"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = o.netProfit < 0 ? "#fef2f2" : o.cogsComplete === false ? "#fffbeb" : "#ffffff"; }}
