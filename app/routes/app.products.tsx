@@ -335,7 +335,8 @@ export default function ProductsPage() {
     );
   }
 
-  const topProduct = products[0] ?? null;
+  // Only show products with complete COGS as top performer — missing COGS inflates margin to 100%
+  const topProduct = products.find((p) => p.cogsComplete && p.grossProfit > 0) ?? null;
   const worstProduct = [...products].filter((p) => p.grossProfit < 0).sort((a, b) => a.grossProfit - b.grossProfit)[0] ?? null;
 
   return (
@@ -350,7 +351,7 @@ export default function ProductsPage() {
                 {summary.missingCogsVariants} product variant{summary.missingCogsVariants !== 1 ? "s" : ""} missing cost data — margins may be overstated
               </p>
               <p style={{ margin: "2px 0 0", fontSize: "12px", color: tokens.warning, opacity: 0.8 }}>
-                Gross profit for incomplete products is understated.
+                Without cost data, margins appear higher than they actually are.
               </p>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "flex-end", flexShrink: 0 }}>

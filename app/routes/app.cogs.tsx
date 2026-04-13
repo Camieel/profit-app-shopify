@@ -497,6 +497,7 @@ export default function CogsPage() {
           href={getShopifyProductUrl(variant.shopifyProductId)}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
           style={{ fontSize: "13px", fontWeight: 600, color: "#2563eb", textDecoration: "none" }}
           onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
           onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
@@ -515,7 +516,11 @@ export default function CogsPage() {
       <IndexTable.Cell>
         {variant.costPerItem != null
           ? <span style={{ fontSize: "13px", color: tokens.textMuted }}>${variant.costPerItem.toFixed(2)}</span>
-          : <DBadge variant="warning" size="sm">Not in Shopify</DBadge>}
+          : (
+          <span title="No cost price set in Shopify admin (Products → variant → Cost per item). Add a Custom Cost below to override.">
+            <DBadge variant="warning" size="sm">Not in Shopify</DBadge>
+          </span>
+        )}
       </IndexTable.Cell>
       <IndexTable.Cell>
         <InlineCostInput variant={variant} />
@@ -529,6 +534,11 @@ export default function CogsPage() {
   ));
 
   return (
+    <>
+    <style>{`
+      /* Prevent Polaris bulk action bar from covering summary cards */
+      .Polaris-IndexTable__BulkActionsWrapper { position: relative !important; }
+    `}</style>
     <Page
       title="COGS Configuration"
       backAction={{ content: "Settings", url: "/app/settings" }}
@@ -536,7 +546,8 @@ export default function CogsPage() {
     >
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
 
-        {/* Coverage summary */}
+        {/* Coverage summary — kept outside IndexTable scroll context so bulk action bar doesn't cover it */}
+        <div id="cogs-summary">
         <DCard>
           <div style={{ padding: "20px 24px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "32px", alignItems: "start" }}>
@@ -577,6 +588,7 @@ export default function CogsPage() {
             </div>
           </div>
         </DCard>
+        </div>
 
         {/* Alert bar when missing */}
         {missingCogsCount > 0 && (
@@ -593,32 +605,16 @@ export default function CogsPage() {
                 Profit is overstated until this is fixed
               </p>
             </div>
-            <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+            {/* Quiet segmented filter toggle */}
+            <div style={{ display: "flex", borderRadius: "8px", border: `1px solid ${tokens.border}`, overflow: "hidden", flexShrink: 0 }}>
+              <button
+                onClick={() => updateParam("filter", "all")}
+                style={{ padding: "6px 14px", background: filter !== "missing" ? tokens.text : "#f8fafc", color: filter !== "missing" ? "#fff" : tokens.textMuted, border: "none", cursor: "pointer", fontSize: "12px", fontWeight: 600, borderRight: `1px solid ${tokens.border}` }}
+              >All</button>
               <button
                 onClick={() => updateParam("filter", "missing")}
-                style={{
-                  padding: "7px 16px", borderRadius: "8px",
-                  background: tokens.loss, color: "#fff",
-                  border: "none", cursor: "pointer",
-                  fontSize: "13px", fontWeight: 600,
-                  transition: "opacity 0.15s",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
-                onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
-              >
-                Show missing only
-              </button>
-              <button
-                onClick={() => setImportOpen(true)}
-                style={{
-                  padding: "7px 16px", borderRadius: "8px",
-                  background: "transparent", color: tokens.loss,
-                  border: `1px solid ${tokens.lossBorder}`, cursor: "pointer",
-                  fontSize: "13px", fontWeight: 600,
-                }}
-              >
-                Import CSV
-              </button>
+                style={{ padding: "6px 14px", background: filter === "missing" ? tokens.loss : "#f8fafc", color: filter === "missing" ? "#fff" : tokens.textMuted, border: "none", cursor: "pointer", fontSize: "12px", fontWeight: 600 }}
+              >Missing only</button>
             </div>
           </div>
         )}
@@ -626,20 +622,8 @@ export default function CogsPage() {
         {/* Table */}
         <DCard>
           {filter === "missing" && (
-            <div style={{
-              padding: "10px 16px", borderBottom: `1px solid ${tokens.border}`,
-              background: tokens.warningBg,
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-            }}>
-              <span style={{ fontSize: "13px", fontWeight: 600, color: tokens.warning }}>
-                ⚠ Showing missing COGS only
-              </span>
-              <button
-                onClick={() => updateParam("filter", "all")}
-                style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: tokens.textMuted, textDecoration: "underline" }}
-              >
-                Show all
-              </button>
+            <div style={{ padding: "8px 16px", borderBottom: `1px solid ${tokens.border}`, background: tokens.warningBg }}>
+              <span style={{ fontSize: "12px", color: tokens.warning, fontWeight: 500 }}>⚠ Filtered: showing missing COGS only</span>
             </div>
           )}
 
@@ -724,5 +708,6 @@ export default function CogsPage() {
         variantIds={selectedResources}
       />
     </Page>
+    </>
   );
 }
