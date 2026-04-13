@@ -351,7 +351,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 // ── Dismiss hook ──────────────────────────────────────────────────────────────
-const DISMISS_KEY = "cp_dismissed_actions";
+const DISMISS_KEY = "cp_dismissed_actions_v2";
 const DISMISS_TTL = 24 * 60 * 60 * 1000;
 function useDismissed() {
   const [dismissed, setDismissed] = useState<string[]>([]);

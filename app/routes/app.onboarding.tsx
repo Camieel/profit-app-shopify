@@ -52,6 +52,7 @@ interface LoaderData {
   variantsWithCost: number;
   // Aha moment data — cascading lookback (7d → 30d → 90d)
   recentOrderCount: number;
+  avgOrderRevenue: number;
   unprofitableOrderCount: number;
   totalLoss7d: number;
   potentialHolds7d: number;
@@ -132,11 +133,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const totalLoss7d = unprofitableOrders.reduce((s, o) => s + Math.abs(o.netProfit), 0);
   const worstOrder = unprofitableOrders[0] ?? null;
+  const avgOrderRevenue = recentOrders.length > 0
+    ? recentOrders.reduce((s, o) => s + o.totalPrice, 0) / recentOrders.length
+    : 75;
 
   return {
     totalVariants,
     variantsWithCost,
     recentOrderCount: recentOrders.length,
+    avgOrderRevenue,
     unprofitableOrderCount: unprofitableOrders.length,
     totalLoss7d,
     potentialHolds7d: unprofitableOrders.length,
@@ -234,7 +239,7 @@ const GATEWAY_OPTIONS = [
   { label: "Checkout.com", value: "checkout", percent: 1.9, fixed: 0.2 },
   { label: "Razorpay", value: "razorpay", percent: 2.0, fixed: 0.0 },
   { label: "2Checkout (Verifone)", value: "twocheckout", percent: 3.5, fixed: 0.35 },
-  { label: "iDEAL (via Mollie)", value: "ideal", percent: 0.29, fixed: 0.0 },
+  { label: "iDEAL (via Mollie)", value: "ideal", percent: 0, fixed: 0.29 },
   { label: "Other", value: "other", percent: 2.9, fixed: 0.3 },
 ];
 
@@ -298,7 +303,7 @@ export default function Onboarding() {
   const {
     totalVariants, variantsWithCost, settings, ads,
     recentOrderCount, unprofitableOrderCount, totalLoss7d,
-    potentialHolds7d, worstRecentOrder, lookbackLabel,
+    potentialHolds7d, worstRecentOrder, lookbackLabel, avgOrderRevenue,
   } = useLoaderData() as LoaderData;
 
   const fetcher = useFetcher();
@@ -482,8 +487,9 @@ export default function Onboarding() {
     const allGood = missingCogs === 0 && totalVariants > 0;
     const noProducts = totalVariants === 0;
 
-    // Impact estimate: avg order revenue €75, missing COGS inflates margin by ~15%
-    const estOverstatedProfit = missingCogs * 75 * 0.15;
+    // Impact estimate: use actual avg order revenue, missing COGS fraction × 20% COGS ratio × recent orders
+    const missingFraction = totalVariants > 0 ? missingCogs / totalVariants : 0;
+    const estOverstatedProfit = missingFraction * recentOrderCount * avgOrderRevenue * 0.20;
 
     return (
       <Page narrowWidth>
@@ -527,7 +533,7 @@ export default function Onboarding() {
                         {`${missingCogs} of ${totalVariants} variants are missing a cost price`}
                       </Text>
                       <Text as="p" variant="bodySm" tone="critical">
-                        {`Your profit is currently overstated by an estimated ${fmtCurrency(estOverstatedProfit)} per order cycle. You may be losing money without knowing it.`}
+                        {`Your profit is currently overstated by an estimated ${fmtCurrency(estOverstatedProfit)} based on your last ${recentOrderCount} orders and ~20% average product cost. You may be losing money without knowing it.`}
                       </Text>
                     </BlockStack>
                     <div style={{ height: "6px", borderRadius: "3px", background: "#ffd8d8", overflow: "hidden" }}>
@@ -578,8 +584,10 @@ export default function Onboarding() {
     // ── STEP 2: Transaction Fees ─────────────────────────────────────────────────
   if (step === 2) {
     // Impact calculation — show what this means financially
-    const feePercentNum = parseFloat(feePercent) || 2.9;
-    const feeFixedNum = parseFloat(feeFixed) || 0.3;
+    // parseLocaleFloat handles both "1.8" (en) and "1,8" (nl) decimal notation
+    const parseLocaleFloat = (s: string) => parseFloat(s.replace(",", "."));
+    const feePercentNum = parseLocaleFloat(feePercent) || 2.9;
+    const feeFixedNum = parseLocaleFloat(feeFixed) || 0.3;
     const extraFeeNum = parseFloat(extraFee) || 0;
     const avgOrderValue = 75; // reasonable assumption for preview
     const avgFeePerOrder = (avgOrderValue * (feePercentNum + extraFeeNum) / 100) + feeFixedNum;
@@ -605,7 +613,9 @@ export default function Onboarding() {
                 options={GATEWAY_OPTIONS.map((g) => ({ label: g.label, value: g.value }))}
                 value={paymentGateway}
                 onChange={handleGatewayChange}
-                helpText="Selecting a provider fills in the standard rates. Adjust below if needed."
+                helpText={paymentGateway === "adyen" 
+                  ? "Adyen charges interchange fees on top of processing fees — add your actual interchange rate to the % above if known." 
+                  : "Selecting a provider fills in the standard rates. Adjust below if needed."}
               />
 
               <InlineStack gap="400">
@@ -646,7 +656,7 @@ export default function Onboarding() {
                 <BlockStack gap="100">
                   <Text as="p" variant="bodySm" fontWeight="semibold">With these settings:</Text>
                   <Text as="p" variant="bodySm" tone="subdued">
-                    {`Avg fee per €${avgOrderValue} order: ~${fmtCurrency(avgFeePerOrder)}`}
+                    {`Avg fee per $${avgOrderValue} order: ~$${avgFeePerOrder.toFixed(2)}`}
                   </Text>
                   <Text as="p" variant="bodySm" tone="subdued">
                     {`Monthly impact (est. 200 orders): ~${fmtCurrency(monthlyEstimate)}`}
@@ -882,7 +892,7 @@ export default function Onboarding() {
             <div style={{ padding: "16px", borderRadius: "8px", background: "#fff1f0", border: "1px solid #ffa39e" }}>
               <BlockStack gap="200">
                 <Text as="p" variant="bodySm" fontWeight="semibold" tone="critical">
-                  {`${unprofitableOrderCount} unprofitable orders are waiting for your review`}
+                  {`${unprofitableOrderCount} unprofitable ${unprofitableOrderCount === 1 ? "order is" : "orders are"} waiting for your review`}
                 </Text>
                 <Text as="p" variant="bodySm" tone="subdued">
                   Open the dashboard — the Action Center will show exactly which orders need attention.
