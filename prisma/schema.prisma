@@ -148,11 +148,13 @@ model ProductVariant {
   productId              String
   product                Product  @relation(fields: [productId], references: [id])
 
+
   shopifyVariantId       String
   shopifyInventoryItemId String?
   title                  String
   sku                    String?
 
+  price                  Float?
   costPerItem            Float?
   customCost             Float?
   effectiveCost          Float?

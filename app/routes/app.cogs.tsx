@@ -21,6 +21,7 @@ interface VariantRow {
   shopifyVariantId: string;
   title: string;
   sku: string | null;
+  price: number | null;
   costPerItem: number | null;
   customCost: number | null;
   effectiveCost: number | null;
@@ -86,7 +87,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     where: variantWhere,
     select: {
       id: true, shopifyVariantId: true, title: true, sku: true,
-      costPerItem: true, customCost: true, effectiveCost: true,
+      price: true, costPerItem: true, customCost: true, effectiveCost: true,
       product: { select: { id: true, title: true, shopifyProductId: true } },
     },
     orderBy: [{ effectiveCost: "asc" }, { product: { title: "asc" } }],
@@ -97,7 +98,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return json({
     variants: variants.map((v) => ({
       id: v.id, shopifyVariantId: v.shopifyVariantId, title: v.title, sku: v.sku,
-      costPerItem: v.costPerItem, customCost: v.customCost, effectiveCost: v.effectiveCost,
+      price: v.price, costPerItem: v.costPerItem, customCost: v.customCost, effectiveCost: v.effectiveCost,
       productTitle: v.product.title, productId: v.product.id,
       shopifyProductId: v.product.shopifyProductId,
     })),
@@ -514,12 +515,18 @@ export default function CogsPage() {
         </span>
       </IndexTable.Cell>
       <IndexTable.Cell>
+        {variant.price != null
+          ? <span style={{ fontSize: "13px", color: tokens.text }}>${variant.price.toFixed(2)}</span>
+          : <span style={{ fontSize: "13px", color: tokens.textMuted }}>—</span>}
+      </IndexTable.Cell>
+      <IndexTable.Cell>
         {variant.costPerItem != null
           ? <span style={{ fontSize: "13px", color: tokens.textMuted, fontStyle: "italic" }}>${variant.costPerItem.toFixed(2)}</span>
           : (
-          <span title="No cost price found in Shopify (Products → variant → Cost per item). Enter your cost in the 'Your Cost' column instead.">
-            <DBadge variant="warning" size="sm">Not in Shopify</DBadge>
-          </span>
+          <span
+            title="No cost per item set in Shopify. Go to Shopify Admin → Products → variant → Cost per item, or enter your cost in the 'Your Cost' column."
+            style={{ fontSize: "13px", color: tokens.textMuted, cursor: "help" }}
+          >—</span>
         )}
       </IndexTable.Cell>
       <IndexTable.Cell>
@@ -530,6 +537,18 @@ export default function CogsPage() {
           ? <span style={{ fontSize: "14px", fontWeight: 700, color: tokens.text }}>${variant.effectiveCost.toFixed(2)}</span>
           : <DBadge variant="danger" size="sm">Missing</DBadge>}
       </IndexTable.Cell>
+      <IndexTable.Cell>
+        {(() => {
+          if (variant.price == null || variant.effectiveCost == null) return <span style={{ color: tokens.textMuted }}>—</span>;
+          const margin = ((variant.price - variant.effectiveCost) / variant.price) * 100;
+          const color = margin >= 40 ? tokens.profit : margin >= 20 ? "#D97706" : tokens.loss;
+          return (
+            <span style={{ fontSize: "13px", fontWeight: 600, color }}>
+              {margin.toFixed(1)}%
+            </span>
+          );
+        })()}
+      </IndexTable.Cell>
     </IndexTable.Row>
   ));
 
@@ -538,13 +557,61 @@ export default function CogsPage() {
     <style>{`
       /* Prevent Polaris bulk action bar from covering summary cards */
       .Polaris-IndexTable__BulkActionsWrapper { position: relative !important; }
+      /* Gray background on read-only columns (Sell Price, From Shopify, Cost Used, Margin) */
+      .Polaris-IndexTable__Table td:nth-child(4),
+      .Polaris-IndexTable__Table td:nth-child(5),
+      .Polaris-IndexTable__Table td:nth-child(7),
+      .Polaris-IndexTable__Table td:nth-child(8) {
+        background-color: #F8FAFC !important;
+      }
+      /* Subtle hover on editable column */
+      .Polaris-IndexTable__Table td:nth-child(6):hover {
+        background-color: #EFF6FF !important;
+      }
     `}</style>
     <Page
-      title="COGS Configuration"
+      title="Product Cost Prices"
       backAction={{ content: "Settings", url: "/app/settings" }}
       primaryAction={{ content: "Import CSV", onAction: () => setImportOpen(true) }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+
+        {/* ── Page intro ──────────────────────────────────────────────── */}
+        <div style={{
+          padding: "16px 20px", borderRadius: "10px",
+          background: "#EFF6FF", border: "1px solid #BFDBFE",
+          display: "flex", gap: "16px", alignItems: "flex-start",
+        }}>
+          <span style={{ fontSize: "20px", flexShrink: 0, marginTop: "1px" }}>💡</span>
+          <div>
+            <p style={{ margin: "0 0 4px", fontSize: "14px", fontWeight: 700, color: "#1E3A8A" }}>
+              Set your cost prices here so ClearProfit can calculate accurate profit
+            </p>
+            <p style={{ margin: "0 0 10px", fontSize: "13px", color: "#1E40AF", lineHeight: "1.5" }}>
+              We automatically sync the cost per item you set in Shopify. If your real cost is different
+              (e.g. you include packaging or import duties), enter it in the <strong>Your Cost</strong> column — it overrides the Shopify value.
+              The <strong>Cost Used</strong> column always shows which value ClearProfit actually deducts from profit.
+            </p>
+            <details style={{ cursor: "pointer" }}>
+              <summary style={{ fontSize: "12px", fontWeight: 600, color: "#2563EB", userSelect: "none", listStyle: "none", display: "flex", alignItems: "center", gap: "4px" }}>
+                <span>▶ How does cost syncing work?</span>
+              </summary>
+              <div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                {[
+                  ["🔵 Shopify cost", "Set in Shopify Admin → Products → variant → Cost per item. Synced automatically. Read-only here."],
+                  ["✏️ Your Cost", "Enter here when your real cost differs — includes packaging, duties, storage. This overrides the Shopify value."],
+                  ["✅ Cost Used", "The value ClearProfit uses in profit calculations. Priority: Your Cost → Shopify cost → (missing)."],
+                  ["📊 Margin", "Gross margin based on selling price vs cost. Before transaction fees and ad spend."],
+                ].map(([label, desc]) => (
+                  <div key={label as string} style={{ display: "flex", gap: "8px", fontSize: "12px", color: "#1E40AF" }}>
+                    <span style={{ fontWeight: 700, flexShrink: 0, minWidth: "110px" }}>{label as string}</span>
+                    <span style={{ opacity: 0.85 }}>{desc as string}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          </div>
+        </div>
 
         {/* Coverage summary — kept outside IndexTable scroll context so bulk action bar doesn't cover it */}
         <div id="cogs-summary">
@@ -639,16 +706,16 @@ export default function CogsPage() {
             />
           </div>
 
-          {/* Column explainer */}
-          <div style={{ padding: "8px 16px 0", display: "flex", gap: "24px" }}>
-            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
-              <span style={{ fontWeight: 600, color: tokens.text }}>From Shopify</span> — read-only, synced automatically
+          {/* Column legend */}
+          <div style={{ padding: "8px 16px 6px", display: "flex", gap: "16px", alignItems: "center", borderBottom: `1px solid ${tokens.border}` }}>
+            <span style={{ fontSize: "11px", color: tokens.textMuted, display: "flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", background: "#F8FAFC", border: "1px solid #E2E8F0" }} />
+              🔒 Auto-synced from Shopify — read-only
             </span>
-            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
-              <span style={{ fontWeight: 600, color: tokens.text }}>Your Cost</span> — enter your real cost here (includes packaging, duties). Overrides Shopify value.
-            </span>
-            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
-              <span style={{ fontWeight: 600, color: tokens.text }}>Cost Used</span> — what ClearProfit deducts from profit
+            <span style={{ fontSize: "11px", color: tokens.textMuted }}>·</span>
+            <span style={{ fontSize: "11px", color: tokens.textMuted, display: "flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", background: "#FFFFFF", border: "1px solid #E2E8F0" }} />
+              ✏️ Your Cost — enter your value here
             </span>
           </div>
 
@@ -662,9 +729,11 @@ export default function CogsPage() {
               headings={[
                 { title: "Product & Variant" },
                 { title: "SKU" },
-                { title: "From Shopify" },
-                { title: "Your Cost" },
-                { title: "Cost Used" },
+                { title: "Sell Price 🔒" },
+                { title: "From Shopify 🔒" },
+                { title: "Your Cost ✏️" },
+                { title: "Cost Used 🔒" },
+                { title: "Margin 🔒" },
               ]}
               emptyState={
                 filter === "missing" && missingCogsCount === 0 ? (
