@@ -255,7 +255,7 @@ function InlineCostInput({ variant }: { variant: VariantRow }) {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-      <div style={{ maxWidth: "120px" }}>
+      <div style={{ maxWidth: "150px" }}>
         <TextField
           label="Cost" labelHidden
           type="number" prefix="$"
@@ -708,13 +708,11 @@ export default function CogsPage() {
 
           {/* Column legend */}
           <div style={{ padding: "8px 16px 6px", display: "flex", gap: "16px", alignItems: "center", borderBottom: `1px solid ${tokens.border}` }}>
-            <span style={{ fontSize: "11px", color: tokens.textMuted, display: "flex", alignItems: "center", gap: "4px" }}>
-              <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", background: "#F8FAFC", border: "1px solid #E2E8F0" }} />
+            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
               🔒 Auto-synced from Shopify — read-only
             </span>
             <span style={{ fontSize: "11px", color: tokens.textMuted }}>·</span>
-            <span style={{ fontSize: "11px", color: tokens.textMuted, display: "flex", alignItems: "center", gap: "4px" }}>
-              <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", background: "#FFFFFF", border: "1px solid #E2E8F0" }} />
+            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
               ✏️ Your Cost — enter your value here
             </span>
           </div>
