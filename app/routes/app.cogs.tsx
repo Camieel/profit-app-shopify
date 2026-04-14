@@ -258,7 +258,7 @@ function InlineCostInput({ variant }: { variant: VariantRow }) {
         <TextField
           label="Cost" labelHidden
           type="number" prefix="$"
-          placeholder={variant.costPerItem != null ? String(variant.costPerItem) : "0.00"}
+          placeholder={variant.costPerItem != null ? `${variant.costPerItem.toFixed(2)} (from Shopify)` : "Enter cost…"}
           value={value}
           onChange={setValue}
           onBlur={handleBlur}
@@ -515,9 +515,9 @@ export default function CogsPage() {
       </IndexTable.Cell>
       <IndexTable.Cell>
         {variant.costPerItem != null
-          ? <span style={{ fontSize: "13px", color: tokens.textMuted }}>${variant.costPerItem.toFixed(2)}</span>
+          ? <span style={{ fontSize: "13px", color: tokens.textMuted, fontStyle: "italic" }}>${variant.costPerItem.toFixed(2)}</span>
           : (
-          <span title="No cost price set in Shopify admin (Products → variant → Cost per item). Add a Custom Cost below to override.">
+          <span title="No cost price found in Shopify (Products → variant → Cost per item). Enter your cost in the 'Your Cost' column instead.">
             <DBadge variant="warning" size="sm">Not in Shopify</DBadge>
           </span>
         )}
@@ -639,6 +639,19 @@ export default function CogsPage() {
             />
           </div>
 
+          {/* Column explainer */}
+          <div style={{ padding: "8px 16px 0", display: "flex", gap: "24px" }}>
+            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
+              <span style={{ fontWeight: 600, color: tokens.text }}>From Shopify</span> — read-only, synced automatically
+            </span>
+            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
+              <span style={{ fontWeight: 600, color: tokens.text }}>Your Cost</span> — enter your real cost here (includes packaging, duties). Overrides Shopify value.
+            </span>
+            <span style={{ fontSize: "11px", color: tokens.textMuted }}>
+              <span style={{ fontWeight: 600, color: tokens.text }}>Cost Used</span> — what ClearProfit deducts from profit
+            </span>
+          </div>
+
           <div style={{ opacity: isLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>
             <IndexTable
               resourceName={{ singular: "variant", plural: "variants" }}
@@ -649,9 +662,9 @@ export default function CogsPage() {
               headings={[
                 { title: "Product & Variant" },
                 { title: "SKU" },
-                { title: "Shopify Cost" },
-                { title: "Custom Cost" },
-                { title: "Effective Cost" },
+                { title: "From Shopify" },
+                { title: "Your Cost" },
+                { title: "Cost Used" },
               ]}
               emptyState={
                 filter === "missing" && missingCogsCount === 0 ? (
