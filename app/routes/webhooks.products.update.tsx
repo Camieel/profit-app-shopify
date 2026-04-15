@@ -10,7 +10,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!admin) return new Response(null, { status: 200 });
 
   const product = payload as any;
-  // Veiligere manier om de ID te pakken direct uit de payload
   const shopifyProductId = product.admin_graphql_api_id || `gid://shopify/Product/${product.id}`;
 
   try {
@@ -28,7 +27,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
     const customCostMap = new Map(existingVariants.map(v => [v.shopifyVariantId, v.customCost]));
 
-    // 3. Haal de kostprijzen van ALLE varianten tegelijk op uit Shopify (Slechts 1 API call!)
+    // 3. Haal kostprijzen én verkoopprijzen op via GraphQL
     const costResponse = await admin.graphql(
       `#graphql
       query getProductCosts($id: ID!) {
@@ -37,6 +36,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             edges {
               node {
                 id
+                price
                 inventoryItem {
                   id
                   unitCost { amount }
@@ -48,26 +48,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }`,
       { variables: { id: shopifyProductId } }
     );
-    
+
     const costData: any = await costResponse.json();
     const graphqlVariants = costData.data?.product?.variants?.edges || [];
 
-    // Maak een snelle map om de Shopify data aan de payload te koppelen
     const shopifyCostMap = new Map();
     const shopifyInventoryMap = new Map();
+    const shopifyPriceMap = new Map();
+
     for (const { node } of graphqlVariants) {
-      const cost = node.inventoryItem?.unitCost?.amount ? parseFloat(node.inventoryItem.unitCost.amount) : null;
+      const cost = node.inventoryItem?.unitCost?.amount
+        ? parseFloat(node.inventoryItem.unitCost.amount)
+        : null;
+      const price = node.price ? parseFloat(node.price) : null;
       shopifyCostMap.set(node.id, cost);
       shopifyInventoryMap.set(node.id, node.inventoryItem?.id ?? null);
+      shopifyPriceMap.set(node.id, price);
     }
 
-    // 4. Update alle varianten in de database, razendsnel parallel
+    // 4. Update alle varianten parallel
     await Promise.all((product.variants || []).map((variant: any) => {
       const variantId = variant.admin_graphql_api_id || `gid://shopify/ProductVariant/${variant.id}`;
-      
+
       const costPerItem = shopifyCostMap.get(variantId) ?? null;
       const inventoryItemId = shopifyInventoryMap.get(variantId) ?? null;
-      
+      const price = shopifyPriceMap.get(variantId) ?? null;
+
       const customCost = customCostMap.get(variantId) ?? null;
       // BELANGRIJK: Respecteer de customCost van de handelaar als die bestaat!
       const effectiveCost = customCost ?? costPerItem;
@@ -83,8 +89,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           title: variant.title,
           sku: variant.sku ?? null,
           shopifyInventoryItemId: inventoryItemId,
+          price,
           costPerItem,
-          effectiveCost, // Veilige update
+          effectiveCost,
         },
         create: {
           productId: savedProduct.id,
@@ -92,6 +99,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           title: variant.title,
           sku: variant.sku ?? null,
           shopifyInventoryItemId: inventoryItemId,
+          price,
           costPerItem,
           effectiveCost,
         },
