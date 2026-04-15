@@ -337,10 +337,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const orderId = formData.get("orderId") as string;
     const order = await db.order.findUnique({ where: { id: orderId } });
     if (!order) return json({ error: "Order not found" }, { status: 404 });
-    const foResponse: any = await admin.graphql(`#graphql query getFulfillmentOrders($id: ID!) { order(id: $id) { fulfillmentOrders(first: 1) { nodes { id status } } } }`, { variables: { id: order.shopifyOrderId } });
+    const foResponse: any = await admin.graphql(`query getFulfillmentOrders($id: ID!) { order(id: $id) { fulfillmentOrders(first: 1) { nodes { id status } } } }`, { variables: { id: order.shopifyOrderId } });
     const fo = (await foResponse.json()).data?.order?.fulfillmentOrders?.nodes?.[0];
     if (fo) {
-      const mutRes: any = await admin.graphql(`#graphql mutation releaseHold($id: ID!) { fulfillmentOrderReleaseHold(id: $id) { fulfillmentOrder { id status } userErrors { field message } } }`, { variables: { id: fo.id } });
+      const mutRes: any = await admin.graphql(`mutation releaseHold($id: ID!) { fulfillmentOrderReleaseHold(id: $id) { fulfillmentOrder { id status } userErrors { field message } } }`, { variables: { id: fo.id } });
       const errors = (await mutRes.json()).data?.fulfillmentOrderReleaseHold?.userErrors;
       if (errors?.length > 0) return json({ error: errors[0].message }, { status: 400 });
     }

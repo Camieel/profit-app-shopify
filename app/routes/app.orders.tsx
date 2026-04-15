@@ -147,8 +147,8 @@ const tokens = {
   border: "#e2e8f0", cardBg: "#ffffff", text: "#0f172a", textMuted: "#64748b",
 };
 
-function DCard({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <div style={{ background: tokens.cardBg, border: `1px solid ${tokens.border}`, borderRadius: "12px", overflow: "hidden", ...style }}>{children}</div>;
+function DCard({ children, style, scrollable }: { children: React.ReactNode; style?: React.CSSProperties; scrollable?: boolean }) {
+  return <div style={{ background: tokens.cardBg, border: `1px solid ${tokens.border}`, borderRadius: "12px", overflow: scrollable ? "clip" : "hidden", ...style }}>{children}</div>;
 }
 
 function DBadge({ children, variant = "default", size = "md" }: {
@@ -303,7 +303,7 @@ function OrdersTable({ orders, shop, page, totalPages, totalCount, missingCogsCo
 }) {
   const costIcons: Record<string, string> = { Ads: "📢", COGS: "📦", Shipping: "🚚", Fees: "💳" };
   return (
-    <DCard>
+    <DCard scrollable>
       {/* Toolbar */}
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${tokens.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc" }}>
         <p style={{ margin: 0, fontSize: "12px", color: tokens.textMuted }}>{sortMode === "loss" ? "Sorted: worst first" : "Sorted: newest first"}</p>
@@ -354,10 +354,17 @@ function OrdersTable({ orders, shop, page, totalPages, totalCount, missingCogsCo
                   </div>
                 ) : <span style={{ fontSize: "12px", color: tokens.textMuted }}>—</span>}
               </div>
-              <div>
-                {o.isHeld ? <ReleaseHoldButton orderId={o.id} /> : (
-                  <a href={getOrderUrl(shop, o.shopifyOrderId)} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: "#2563eb", textDecoration: "none", fontWeight: 500 }}>View ↗</a>
-                )}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {o.isHeld
+                  ? <ReleaseHoldButton orderId={o.id} />
+                  : o.financialStatus === "refunded"
+                  ? <DBadge variant="neutral" size="sm">Refunded</DBadge>
+                  : (o.financialStatus === "voided" || o.financialStatus === "cancelled")
+                  ? <DBadge variant="neutral" size="sm">Cancelled</DBadge>
+                  : o.financialStatus === "partially_refunded"
+                  ? <DBadge variant="warning" size="sm">Part. refunded</DBadge>
+                  : <a href={getOrderUrl(shop, o.shopifyOrderId)} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: "#2563eb", textDecoration: "none", fontWeight: 500 }}>View ↗</a>
+                }
               </div>
             </div>
           );
