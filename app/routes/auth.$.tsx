@@ -20,7 +20,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     create: { shop: session.shop },
   });
 
-  syncAllProductCosts(admin, session.shop).catch((err) => 
+  syncAllProductCosts(admin, session.shop).catch((err) =>
     console.error("[Background Sync] Failed during auth:", err)
   );
 
@@ -48,6 +48,7 @@ async function syncAllProductCosts(admin: any, shop: string) {
                 edges {
                   node {
                     id title sku
+                    price
                     inventoryItem {
                       id
                       unitCost { amount }
@@ -73,12 +74,28 @@ async function syncAllProductCosts(admin: any, shop: string) {
         create: { shop, shopifyProductId: product.id, title: product.title },
       });
 
-      // 2. Upsert all variants in parallel (Much faster!)
+      // 2. Upsert all variants — preserve customCost overrides
       await Promise.all(
-        product.variants.edges.map(({ node: variant }: any) => {
+        product.variants.edges.map(async ({ node: variant }: any) => {
           const costPerItem = variant.inventoryItem?.unitCost?.amount
             ? parseFloat(variant.inventoryItem.unitCost.amount)
             : null;
+
+          const price = variant.price ? parseFloat(variant.price) : null;
+
+          // Check if merchant has set a custom cost override
+          const existing = await db.productVariant.findUnique({
+            where: {
+              productId_shopifyVariantId: {
+                productId: savedProduct.id,
+                shopifyVariantId: variant.id,
+              },
+            },
+            select: { customCost: true },
+          });
+
+          // effectiveCost priority: customCost (merchant override) → costPerItem (Shopify) → null
+          const effectiveCost = existing?.customCost ?? costPerItem ?? null;
 
           return db.productVariant.upsert({
             where: {
@@ -91,8 +108,11 @@ async function syncAllProductCosts(admin: any, shop: string) {
               title: variant.title,
               sku: variant.sku ?? null,
               shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              price,
               costPerItem,
-              effectiveCost: costPerItem, // Sets baseline effective cost
+              // Never overwrite customCost — only update effectiveCost
+              // using the correct priority: customCost > costPerItem
+              effectiveCost,
             },
             create: {
               productId: savedProduct.id,
@@ -100,8 +120,9 @@ async function syncAllProductCosts(admin: any, shop: string) {
               title: variant.title,
               sku: variant.sku ?? null,
               shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              price,
               costPerItem,
-              effectiveCost: costPerItem,
+              effectiveCost: costPerItem, // No custom cost yet on create
             },
           });
         })
@@ -111,7 +132,7 @@ async function syncAllProductCosts(admin: any, shop: string) {
     cursor = data.data?.products?.pageInfo?.hasNextPage
       ? data.data?.products?.pageInfo?.endCursor
       : null;
-      
+
   } while (cursor);
 
   console.log(`[COGS Sync] Complete for ${shop}`);
