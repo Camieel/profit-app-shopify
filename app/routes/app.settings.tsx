@@ -48,11 +48,115 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 };
 
-// ── Action (unchanged) ────────────────────────────────────────────────────────
+// ── Sync products helper ──────────────────────────────────────────────────────
+async function syncAllProducts(admin: any, shop: string): Promise<{ synced: number }> {
+  let cursor: string | null = null;
+  let synced = 0;
+
+  do {
+    const result: any = await admin.graphql(
+      `#graphql
+      query GetProducts($cursor: String) {
+        products(first: 50, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id title
+              variants(first: 100) {
+                edges {
+                  node {
+                    id title sku price
+                    inventoryItem {
+                      id
+                      unitCost { amount }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`,
+      { variables: { cursor } }
+    );
+
+    const data: any = await result.json();
+    const products = data.data?.products?.edges || [];
+
+    for (const { node: product } of products) {
+      const savedProduct = await db.product.upsert({
+        where: { shop_shopifyProductId: { shop, shopifyProductId: product.id } },
+        update: { title: product.title },
+        create: { shop, shopifyProductId: product.id, title: product.title },
+      });
+
+      await Promise.all(
+        product.variants.edges.map(async ({ node: variant }: any) => {
+          const costPerItem = variant.inventoryItem?.unitCost?.amount
+            ? parseFloat(variant.inventoryItem.unitCost.amount)
+            : null;
+          const price = variant.price ? parseFloat(variant.price) : null;
+
+          // Preserve existing customCost
+          const existing = await db.productVariant.findUnique({
+            where: {
+              productId_shopifyVariantId: {
+                productId: savedProduct.id,
+                shopifyVariantId: variant.id,
+              },
+            },
+            select: { customCost: true },
+          });
+
+          const effectiveCost = existing?.customCost ?? costPerItem ?? null;
+
+          return db.productVariant.upsert({
+            where: {
+              productId_shopifyVariantId: {
+                productId: savedProduct.id,
+                shopifyVariantId: variant.id,
+              },
+            },
+            update: {
+              title: variant.title,
+              sku: variant.sku ?? null,
+              shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              price,
+              costPerItem,
+              effectiveCost,
+            },
+            create: {
+              productId: savedProduct.id,
+              shopifyVariantId: variant.id,
+              title: variant.title,
+              sku: variant.sku ?? null,
+              shopifyInventoryItemId: variant.inventoryItem?.id ?? null,
+              price,
+              costPerItem,
+              effectiveCost: costPerItem,
+            },
+          });
+        })
+      );
+
+      synced += product.variants.edges.length;
+    }
+
+    cursor = data.data?.products?.pageInfo?.hasNextPage
+      ? data.data?.products?.pageInfo?.endCursor
+      : null;
+
+  } while (cursor);
+
+  return { synced };
+}
+
+// ── Action ────────────────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
+
   if (intent === "saveSettings") {
     const holdMarginThreshold = parseFloat(formData.get("holdMarginThreshold") as string) || 0;
     await db.shopSettings.upsert({
@@ -62,6 +166,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
     return json({ success: true });
   }
+
+  if (intent === "syncProducts") {
+    try {
+      const { synced } = await syncAllProducts(admin, session.shop);
+      console.log(`[Manual Sync] Complete for ${session.shop} — ${synced} variants`);
+      return json({ success: true, synced, intent: "syncProducts" });
+    } catch (err) {
+      console.error("[Manual Sync] Failed:", err);
+      return json({ error: "Sync failed", intent: "syncProducts" }, { status: 500 });
+    }
+  }
+
   if (intent === "disconnectMeta") { await (db as any).adIntegration.updateMany({ where: { shop: session.shop, platform: "meta" }, data: { isActive: false } }); return json({ success: true }); }
   if (intent === "disconnectGoogle") { await (db as any).adIntegration.updateMany({ where: { shop: session.shop, platform: "google" }, data: { isActive: false } }); return json({ success: true }); }
   if (intent === "disconnectTiktok") { await (db as any).adIntegration.updateMany({ where: { shop: session.shop, platform: "tiktok" }, data: { isActive: false } }); return json({ success: true }); }
@@ -231,7 +347,7 @@ function Section({ title, badge, children, helpText }: {
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const data = useLoaderData() as SettingsData;
-  const navigate = useNavigate(); // ← fix: use React Router navigate instead of <a> tags
+  const navigate = useNavigate();
 
   const [holdThreshold, setHoldThreshold] = useState(String(data.holdMarginThreshold));
   const [alertThreshold, setAlertThreshold] = useState(String(data.alertMarginThreshold));
@@ -245,8 +361,12 @@ export default function SettingsPage() {
   const metaSyncFetcher = useFetcher();
   const googleSyncFetcher = useFetcher();
   const tiktokSyncFetcher = useFetcher();
+  const productSyncFetcher = useFetcher();
   const navigation = useNavigation();
   const isSaving = navigation.state === "submitting";
+
+  const isProductSyncing = productSyncFetcher.state === "submitting";
+  const productSyncResult = productSyncFetcher.data as any;
 
   const handleSave = () => {
     submit({ intent: "saveSettings", holdMarginThreshold: holdThreshold, alertMarginThreshold: alertThreshold, transactionFeePercent: feePercent, transactionFeeFixed: feeFixed, defaultShippingCost: shippingCost, alertEmail }, { method: "POST" });
@@ -381,6 +501,40 @@ export default function SettingsPage() {
           </div>
         </Section>
 
+        {/* ── Data sync ─────────────────────────────────────────────────────── */}
+        <Section title="Data Sync" helpText="Manual sync — use when product prices or costs aren't showing up correctly">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+            <div>
+              <p style={{ margin: "0 0 2px", fontSize: "13px", fontWeight: 600, color: tokens.text }}>Sync product prices & costs</p>
+              <p style={{ margin: 0, fontSize: "12px", color: tokens.textMuted }}>
+                Re-fetches all variants from Shopify — updates sell price and cost per item. Your custom costs are preserved.
+              </p>
+            </div>
+            <button
+              onClick={() => productSyncFetcher.submit({ intent: "syncProducts" }, { method: "POST" })}
+              disabled={isProductSyncing}
+              style={{ padding: "8px 18px", borderRadius: "8px", background: isProductSyncing ? "#f1f5f9" : tokens.text, color: isProductSyncing ? tokens.textMuted : "#fff", border: `1px solid ${tokens.border}`, cursor: isProductSyncing ? "default" : "pointer", fontSize: "13px", fontWeight: 600, flexShrink: 0, transition: "all 0.15s" }}
+            >
+              {isProductSyncing ? "Syncing…" : "Sync products"}
+            </button>
+          </div>
+
+          {/* Result feedback */}
+          {productSyncResult?.synced !== undefined && (
+            <div style={{ marginTop: "12px", padding: "10px 14px", borderRadius: "8px", background: tokens.profitBg, border: `1px solid ${tokens.profitBorder}` }}>
+              <p style={{ margin: 0, fontSize: "13px", color: tokens.profit, fontWeight: 500 }}>
+                ✓ Synced {productSyncResult.synced} variants — prices and costs are up to date
+              </p>
+            </div>
+          )}
+          {productSyncResult?.error && (
+            <div style={{ marginTop: "12px", padding: "10px 14px", borderRadius: "8px", background: tokens.lossBg, border: `1px solid ${tokens.lossBorder}` }}>
+              <p style={{ margin: 0, fontSize: "13px", color: tokens.loss, fontWeight: 500 }}>
+                ✗ Sync failed — check Railway logs for details
+              </p>
+            </div>
+          )}
+        </Section>
 
         {/* Save button */}
         <div>
