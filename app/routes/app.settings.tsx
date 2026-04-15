@@ -55,8 +55,7 @@ async function syncAllProducts(admin: any, shop: string): Promise<{ synced: numb
 
   do {
     const result: any = await admin.graphql(
-      `#graphql
-      query GetProducts($cursor: String) {
+      `query GetProducts($cursor: String) {
         products(first: 50, after: $cursor) {
           pageInfo { hasNextPage endCursor }
           edges {
